@@ -192,7 +192,7 @@ class Assembly {
         head: "noise-head" as Sha,
         target: { repo: this.v.repo, base: "main" },
         bodyHash: "noise-pr" as Hash,
-        appliedSubmit: null,
+        applied: null,
         mergeable: "yes",
         checks: { state: "pass", failedRunId: null, latestRunCreatedAt: null },
         closes: [other],
@@ -242,7 +242,7 @@ export function memberGamma(t: MemberSituation, v: Variant): Built {
       head,
       target: { repo: v.repo, base: "main" },
       bodyHash: `prbody-${v.name}` as Hash,
-      appliedSubmit: null,
+      applied: null,
       mergeable: t.mergeable,
       checks: { state: t.checks, failedRunId: t.checks === "fail" ? run : null, latestRunCreatedAt: (v.t0 + 1) as Millis },
       closes: [a.m],
@@ -256,7 +256,7 @@ export function memberGamma(t: MemberSituation, v: Variant): Built {
       head: `foreign-${v.name}` as Sha,
       target: { repo: v.repo, base: v.noise ? "dev" : "main" },
       bodyHash: "foreign" as Hash,
-      appliedSubmit: null,
+      applied: null,
       mergeable: "yes",
       checks: { state: "pass", failedRunId: null, latestRunCreatedAt: null },
       closes: v.noise ? [a.m, { repo: v.repo, number: v.member + 500 }] : [a.m],
@@ -321,7 +321,9 @@ export function memberGamma(t: MemberSituation, v: Variant): Built {
   const submits = a.records.filter((r) => r.body.kind === "prSubmit");
   const latest = submits.at(-1) ?? null;
   const viaSubmit = t.materialized === "pending" && t.ours === "maintainable" && latest !== null && !v.noise;
-  a.prs = a.prs.map((p) => (p.ref.number !== v.pr ? p : { ...p, appliedSubmit: viaSubmit ? (submits.at(-2)?.id ?? null) : (latest?.id ?? null) }));
+  // The member has no required design commits in these fixtures, so the body credits none.
+  const appliedId = viaSubmit ? (submits.at(-2)?.id ?? null) : (latest?.id ?? null);
+  a.prs = a.prs.map((p) => (p.ref.number !== v.pr ? p : { ...p, applied: appliedId === null ? null : { submit: appliedId, designCommits: [] } }));
   if (t.materialized === "pending" && !viaSubmit && !(t.ours === "none" && t.deliverDone)) {
     // an unapplied body replacement on M from an `answered` question (no contract change)
     const q = a.claim("question");
@@ -443,7 +445,7 @@ export function reconcileGamma(h: ReconcileHistory, v: Variant): Built {
           head: `h-${v.name}` as Sha,
           target: { repo: v.repo, base: "main" },
           bodyHash: "pr" as Hash,
-          appliedSubmit: null,
+          applied: null,
           mergeable: "yes",
           checks: { state: "pass", failedRunId: null, latestRunCreatedAt: null },
           closes: [a.m],
@@ -538,7 +540,7 @@ export function verificationGamma(r: VerificationRecipe, v: Variant): Built {
         head: `h-${ref.number}` as Sha,
         target: { repo: v.repo, base: "main" },
         bodyHash: "pr" as Hash,
-        appliedSubmit: null,
+        applied: null,
         mergeable: "yes",
         checks: { state: "pass", failedRunId: null, latestRunCreatedAt: null },
         closes: [ref],

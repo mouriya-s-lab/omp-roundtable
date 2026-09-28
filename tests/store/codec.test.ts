@@ -55,7 +55,7 @@ describe("record comment", () => {
   });
 
   test("a validly signed block whose payload has the wrong shape is rejected", () => {
-    const forged = encodeMarker(key, { kind: "pr", payload: { agenda, member: agenda, appliedSubmit: "1" as RecordId } }).replace(" pr ", " draft ");
+    const forged = encodeMarker(key, { kind: "pr", payload: { agenda, member: agenda, appliedSubmit: "1" as RecordId, designCommits: [] } }).replace(" pr ", " draft ");
     expect(scanMarkers(key, forged)).toEqual([{ ok: false, kind: "draft", reason: "payload does not match the draft schema" }]);
   });
 });

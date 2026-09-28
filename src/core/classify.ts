@@ -151,7 +151,13 @@ export type SubjectWitness =
 export type EffectTarget =
   | { readonly kind: "closeAgenda" }
   | { readonly kind: "attachAgenda"; readonly parent: IssueRef }
-  | { readonly kind: "openPr" | "updatePr"; readonly submit: StoredRecord; readonly pr: PrRef | null }
+  | {
+      readonly kind: "openPr" | "updatePr";
+      readonly submit: StoredRecord;
+      readonly pr: PrRef | null;
+      /** Main-session design commits the rendered body must credit (core.md §3 效应). */
+      readonly designCommits: readonly Sha[];
+    }
   | { readonly kind: "applyBody"; readonly decision: RecordId; readonly replacement: BodyReplacement }
   | { readonly kind: "createIssue"; readonly draftId: DraftId; readonly draft: Draft }
   | { readonly kind: "noticeDecision"; readonly decision: RecordId; readonly issue: IssueRef }
@@ -245,6 +251,13 @@ const issueOf = (snap: Snapshot, ref: IssueRef): IssueFact | null => snap.issues
 const sameRepo = (a: RepoRef, b: RepoRef): boolean => a.owner === b.owner && a.name === b.name;
 
 const prKey = (p: PrRef): string => `${p.repo.owner}/${p.repo.name}#${p.number}`;
+
+/** The PR body carries exactly this submit and this set of design commits. */
+const carries = (pr: PrFact, submit: RecordId, design: readonly Sha[]): boolean =>
+  pr.applied !== null &&
+  pr.applied.submit === submit &&
+  pr.applied.designCommits.length === design.length &&
+  design.every((d) => pr.applied?.designCommits.includes(d) === true);
 
 /** PRs given up by a `replacePr` decision (stamped `abandon`). */
 function abandonedPrs(snap: Snapshot): Set<string> {
@@ -813,7 +826,7 @@ function classifyMember(
     ours: pr === null ? "none" : "maintainable",
     foreign: foreign.length > 0,
     foreignNoticed: pr !== null && snap.effectMarkers.includes(mint("noticeForeignPr", ctx, prKey(pr.ref), 1)),
-    materialized: memberEffectsPending || headMoved || (latestSubmit !== null && (pr === null ? true : pr.appliedSubmit !== latestSubmit.id)) ? "pending" : "settled",
+    materialized: memberEffectsPending || headMoved || (latestSubmit !== null && (pr === null ? true : !carries(pr, latestSubmit.id, requiredDesign))) ? "pending" : "settled",
     review: review.state,
     accept: accept.state,
     repairOwner: headMoved || ownerVerdict !== null || implDefect !== undefined || fixNeeded !== undefined || designFixUnmerged !== null || designMissing !== null,
@@ -1239,7 +1252,13 @@ function classifyEffects(mint: Mint, snap: Snapshot, host: Host, units: readonly
     if (ours.some((p) => p.state.kind === "merged")) continue;
     const pr = ours.find((p) => p.state.kind === "open") ?? null;
     const kind = pr === null ? "openPr" : "updatePr";
-    push(mint(kind, issueKey(member), r.id, 1), { kind, submit: r, pr: pr?.ref ?? null }, unitOf(member), pr !== null && pr.appliedSubmit === r.id);
+    const designCommits = requiredDesignCommits(snap, member);
+    push(
+      mint(kind, issueKey(member), { submit: r.id, designCommits }, 1),
+      { kind, submit: r, pr: pr?.ref ?? null, designCommits },
+      unitOf(member),
+      pr !== null && carries(pr, r.id, designCommits),
+    );
   }
 
   // body replacements, drafts, notices
