@@ -1,6 +1,6 @@
 // admit: decide whether a seat's reply becomes a fact (core.md §4 admit, steps 1–6).
 
-import type { Classified } from "./classify.ts";
+import { outcomeOf, type Classified } from "./classify.ts";
 import { derive, type Obligation } from "./derive.ts";
 import { canonical, fnv64, issueKey, sameIssue, stripSuffix } from "./identity.ts";
 import type {
@@ -222,6 +222,10 @@ function preconditions(snap: Snapshot, c: Classified, ob: Obligation, reply: Rep
       if (d.subject === "woken") {
         const seat = c.seats.find((s) => s.w.holder === d.agentId);
         if (seat === undefined || seat.state !== "parked") return "该 agent 当前不是 parked 的席位持有者。";
+      }
+      if (d.subject === "reopened" && d.verdict === "reopenAccepted") {
+        const entry = c.currentUnit?.members.find((m) => sameIssue(m.issue, d.member));
+        if (entry === undefined || outcomeOf(snap, entry).kind !== "noCode") return "reopenAccepted 只适用于结局为 noCode 的成员；已合并的成员请选 restore 或 correction。";
       }
       const acceptanceMethod =
         (d.subject === "question" && d.verdict.kind === "acceptanceMethod") ||

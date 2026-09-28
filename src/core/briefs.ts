@@ -140,7 +140,7 @@ export function briefFor(input: BriefInput, policy: Policy): string {
     case "decideChecks":
       return mainBrief("checks 在同一个 head 上反复失败", `PR：${input.member.pr?.ref.number ?? "?"}，失败 run：${input.member.failedRun ?? "?"}`, "可选：rerun | fixNeeded | external（external 需立即报告操作员）。");
     case "decideReopened":
-      return mainBrief("结局确立后 issue 被重新打开", `成员：${issueKey(input.reconcile.member)}，事件：${input.reconcile.eventForDecision ?? "?"}`, "可选：restore | correction(附修正草稿，锚点 correctionOf) | reopenAccepted。");
+      return mainBrief("结局确立后 issue 被重新打开", `成员：${issueKey(input.reconcile.member)}，事件：${input.reconcile.eventForDecision ?? "?"}`, "可选：restore | correction(附修正草稿，锚点 correctionOf)；成员结局为 noCode 时还可选 reopenAccepted（撤销确认，回到待交付）。");
     case "decideClosed":
       return mainBrief("待交付成员已被关闭", `成员：${issueKey(input.reconcile.member)}，事件：${input.reconcile.eventForDecision ?? "?"}，正文哈希：${input.reconcile.bodyHash ?? "?"}`, "可选：confirmedNoCode(附理由) | reopen。");
     case "decidePostMergeFail":
