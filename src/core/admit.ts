@@ -223,6 +223,18 @@ function preconditions(snap: Snapshot, c: Classified, ob: Obligation, reply: Rep
         const seat = c.seats.find((s) => s.w.holder === d.agentId);
         if (seat === undefined || seat.state !== "parked") return "该 agent 当前不是 parked 的席位持有者。";
       }
+      const acceptanceMethod =
+        (d.subject === "question" && d.verdict.kind === "acceptanceMethod") ||
+        (d.subject === "findings" && d.perFinding.some((f) => f.verdict.kind === "acceptanceMethod"));
+      const member = c.member?.w.entry.issue ?? null;
+      if (acceptanceMethod && (member === null || !reply.bodyReplacements.some((b) => sameIssue(b.issue, member))))
+        return "acceptanceMethod 裁定必须附带对当前成员验收行的正文替换。";
+      if (d.subject === "findings") {
+        for (const f of d.perFinding) if (f.verdict.kind === "designGap") {
+          const bad = routeIssue(snap, c, f.verdict.route);
+          if (bad !== null) return bad;
+        }
+      }
       if (d.subject === "question" && d.verdict.kind === "designGap") return routeIssue(snap, c, d.verdict.route);
       return null;
     }
