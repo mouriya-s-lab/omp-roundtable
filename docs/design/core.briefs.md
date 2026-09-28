@@ -37,7 +37,7 @@
 | postMerge | 对每个交付目标 repo 分别执行。最新的合并发生在议程 issue 创建之后时，在该合并提交的干净 checkout 上执行（R5）；发生在之前时（召集前的遗留项），在当前默认分支 head 的干净 checkout 上执行，该 head 必须包含合并提交。部署型 repo 在 repo 交付规则规定的目标环境里执行。经真实入口逐条观察覆盖成员的验收行，并跑 repo 校验。与本次无关的失败单列，写明为什么无关 |
 | closure | 对每个交付目标 repo，在包含该 repo 全部合并提交的默认分支 head 上，经真实入口逐行核对 parent 的关闭验证，并核对每个子 issue 的终点事实 |
 | Main `decide(*)` | subject 对应的记录与证据链接；该 subject 可选的 verdict 及各自的后果；需要替换的正文段落及其当前哈希。设计路线的适用条件：`defaultFirst` 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒时改选其他路线；`future` 需要同 repo 的后续承载者，没有就附设计承接项的草稿 |
-| Main `spawn` | 先执行，再回执。registry 中已有请求名匹配、而且不是上一个 agent 的新 agent 时，直接回执；否则用原生 `task` 派出，参数为：`agent`、`isolated: true`、`name` 取请求名、assignment 取简报。前提：宿主设置 `async.enabled` 为真，并且该 agent 类型没有声明 `blocking: true`，否则主会话会同步等待子席位，席位提问时就会死锁。派出后用 `Decision(seated{agentId})` 回执，agentId 取 `task` 返回的实际 id |
+| Main `spawn` | 先执行，再回执。registry 中已有请求名匹配、而且不是上一个 agent 的新 agent 时，直接回执；否则用原生 `task` 派出，参数为：`agent`、`isolated: true`、`name` 取请求名、assignment 取简报给出的一段短文本（请求名、角色、成员链接，以及「票据随每次请求注入、只通过端口回复」），不复制被派席位的简报：简报由 seat adapter 随每次请求注入。前提：宿主设置 `async.enabled` 为真，并且该 agent 类型没有声明 `blocking: true`，否则主会话会同步等待子席位，席位提问时就会死锁。派出后用 `Decision(seated{agentId})` 回执，agentId 取 `task` 返回的实际 id |
 | Main `wake` | 先回执，再执行：先回复 `Decision(woken{agentId})`，再用原生 `write agent://<实际 id>` 唤醒 |
 | Main `report` | 每项的结局，以及 PR、issue、验收评论的链接；树关闭的结论；意外写回主会话工作 checkout 的路径 |
 | 所有主会话简报 | 圆桌是唯一的协议渠道。子席位 `yield` 时的文字会作为原生消息送达主会话，但它不是记录，不据此行动 |
