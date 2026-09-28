@@ -36,7 +36,7 @@
   - `checks: pass | fail | pending | unknown`，以及当前失败的 check run 的 id 与最近一次 check run 的创建时间；
   - closing 引用中的 issue（合并后同样保留）。base 不是默认分支时，GitHub 不解析 closing keyword，所以另外两类来源也计入：程序创建的 PR，取其签名标记所载的成员；召集时指定接管的 PR，取召集它的成员；
   - 是否带本议程的来源标记。
-- **commit 事实**：记录中引用的每个 sha 是否在默认分支上、是否包含在某个 PR 的 head 里；以及提交之间的包含关系。
+- **commit 事实**：记录中引用的每个 sha 是否在默认分支上、是否包含在某个 PR 的 head 里；提交之间的包含关系；以及每个交付目标 base 分支的当前 head，它是 deliver 简报给出的起点。
 - **签章有效的记录**，按写入顺序排列，每条带写入时间。
 
 **宿主观察 `host`**：`seats` 与 `policy` 由 adapter 每轮向宿主查询，不作保存；`execution` 是本进程记下的效应失败时间。
