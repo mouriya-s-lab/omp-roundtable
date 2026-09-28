@@ -60,7 +60,6 @@ export interface Derived {
 export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
   const c = classify(snap, host);
   const out: Obligation[] = [];
-  const needed = new Set<string>();
   const ownersOf = (claim: StoredRecord): { issue: IssueRef; bodyHash: Hash | null }[] =>
     claim.body.kind === "claim" && claim.body.claim.kind === "question"
       ? rowOwners(snap, claim.body.claim.context).map((issue) => ({ issue, bodyHash: snap.issues.find((i) => sameIssue(i.ref, issue))?.bodyHash ?? null }))
@@ -105,7 +104,6 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           const seat: SeatBinding | undefined = owner
             ? { role: "owner", requestName: w.names.owner, workDir: workDir(w.entry.issue, w.names.owner), agent: "task:high" }
             : undefined;
-          if (owner) needed.add(w.names.owner);
           out.push({
             ...base(id, sp.kind, sp.holder, ctx, { kind: sp.kind, member: w, situation: s }, seat === undefined ? {} : { seat }),
             accepts: ["prSubmit", "claim"],
@@ -133,7 +131,6 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           const id = sp.kind === "review" ? w.ids.review : w.ids.accept;
           const name = sp.kind === "review" ? w.names.review : w.names.accept;
           if (id === null || name === null) break;
-          needed.add(name);
           const seat: SeatBinding = { role: sp.kind, requestName: name, workDir: workDir(w.entry.issue, name), agent: "task:mid" };
           out.push({ ...base(id, sp.kind, "gate", ctx, { kind: sp.kind, member: w }, { seat }), accepts: ["verdict", "claim"] });
           break;
@@ -179,7 +176,6 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           if (w.ids.decideClaim !== null && w.claim !== null) out.push(base(w.ids.decideClaim, sp.kind, "main", ctx, { kind: "decideVerificationClaim", claim: w.claim, rowOwners: ownersOf(w.claim) }));
           break;
         case "postMerge":
-          needed.add(w.name);
           out.push({
             ...base(w.ids.postMerge, sp.kind, "gate", ctx, { kind: "postMerge", verification: w }, {
               seat: { role: "postMerge", requestName: w.name, workDir: workDir(w.unit.top.issue, w.name), agent: "task:mid" },
@@ -207,7 +203,6 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           break;
         case "closure":
           if (w.ids.closure !== null && w.name !== null && w.parent !== null) {
-            needed.add(w.name);
             out.push({
               ...base(w.ids.closure, sp.kind, "gate", "closure", { kind: "closure", closure: w }, {
                 seat: { role: "closure", requestName: w.name, workDir: workDir(w.parent, w.name), agent: "task:mid" },
@@ -263,9 +258,12 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
     }
   }
 
-  // seats: spawn / wake for seats needed by the obligations above, plus pending receipts
+  // completion filter (core.md §3): seat/main obligations that already have a completing record
+  const completedIds = new Set(snap.records.filter((r) => r.obligation !== null && r.body.kind !== "claim").map((r) => r.obligation));
+
+  // seats: spawn / wake for seats that still hold an unanswered obligation above, plus pending receipts
   for (const seat of c.seats) {
-    const needs = needed.has(seat.w.requestName);
+    const needs = out.some((o) => o.seat?.requestName === seat.w.requestName && !completedIds.has(o.id));
     for (const sp of seatRules({ seat: seat.state, needed: needs })) {
       if (sp.kind === "spawn") {
         const acknowledgeOnly = seat.state === "pendingAck";
@@ -287,8 +285,6 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
     out.push(base(p.id, "spawn", "main", "seat", { kind: "acknowledge", requestName: p.requestName, agent: p.agentId as AgentId, previous: p.previous }));
   }
 
-  // completion filter (core.md §3): drop seat/main obligations that already have a completing record
-  const completedIds = new Set(snap.records.filter((r) => r.obligation !== null && r.body.kind !== "claim").map((r) => r.obligation));
   const obligations = out.filter((o) => o.holder === "program" || !completedIds.has(o.id));
 
   const waiting =

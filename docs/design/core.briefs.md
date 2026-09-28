@@ -38,7 +38,7 @@
 | closure | 对每个交付目标 repo，在包含该 repo 全部合并提交的默认分支 head 上，经真实入口逐行核对 parent 的关闭验证，并核对每个子 issue 的终点事实 |
 | Main `decide(*)` | subject 对应的记录与证据链接；该 subject 可选的 verdict 及各自的后果；需要替换的正文段落及其当前哈希。设计路线的适用条件：`defaultFirst` 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒时改选其他路线；`future` 需要同 repo 的后续承载者，没有就附设计承接项的草稿 |
 | Main `spawn` | 先执行，再回执。registry 中已有请求名匹配、而且不是上一个 agent 的新 agent 时，直接回执；否则用原生 `task` 派出，参数为：`agent`、`isolated: true`、`name` 取请求名、assignment 取简报。前提：宿主设置 `async.enabled` 为真，并且该 agent 类型没有声明 `blocking: true`，否则主会话会同步等待子席位，席位提问时就会死锁。派出后用 `Decision(seated{agentId})` 回执，agentId 取 `task` 返回的实际 id |
-| Main `wake` | 先回执，再执行：先回复 `Decision(woken{agentId})`，再用原生 `write agent://<实际 id>` 唤醒 |
+| Main `wake` | 先回执，再执行：先回复 `Decision(woken{agentId, since})`，再立即用原生 `write agent://<实际 id>` 唤醒；每个 parked 期只有这一张票据 |
 | Main `report` | 每项的结局，以及 PR、issue、验收评论的链接；树关闭的结论；意外写回主会话工作 checkout 的路径 |
 | 所有主会话简报 | 圆桌是唯一的协议渠道。子席位 `yield` 时的文字会作为原生消息送达主会话，但它不是记录，不据此行动 |
 
@@ -72,5 +72,5 @@
 | `stall` | `external(detail)`，或补充事实的草稿与插入 |
 | `designFix` | 设计 commit |
 | `report` | 汇总 |
-| `seated` / `woken` | 实际 agentId。`seated`：该 agent 是待回执的 agent（在 registry 中且不是 aborted，去掉后缀后等于请求名，还没有任何 `seated` 回执指向它）。`woken`：该 agent 处于 parked |
+| `seated` / `woken` | 实际 agentId。`seated`：该 agent 是待回执的 agent（在 registry 中且不是 aborted，去掉后缀后等于请求名，还没有任何 `seated` 回执指向它）。`woken`：该 agent 处于 parked，`since` 等于它当前的 parked 期 |
 | `noCode`（主会话不持票据，主动提出） | `confirmed`（附理由） |

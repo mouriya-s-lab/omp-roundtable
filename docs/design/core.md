@@ -41,7 +41,7 @@
 
 **宿主观察 `host`**：`seats` 与 `policy` 由 adapter 每轮向宿主查询，不作保存；`execution` 是本进程记下的效应失败时间。
 
-- `seats`：registry 里的每个 agent，含实际 id、请求名（去掉末尾 `-\d+` 后缀）与状态 `live | parked | aborted`。
+- `seats`：registry 里的每个 agent，含实际 id、请求名（去掉末尾 `-\d+` 后缀）与状态 `live | parked | aborted`；parked 的 agent 另带 `parkedSince`（registry `lifecycle.terminalAt`，它最近一次离开 running 的时间），标识一个 parked 期。
   - 某个请求名下，由最近一次 `seated` 回执指向、且状态不是 aborted 的 agent，就是该席位的持有者：持有者为 live 或 parked 时，席位分别为 `live` 或 `parked`；没有这样的 agent 时，席位为 `absent`。
 - `execution`：本进程内每个效应每次执行失败的时间。重启后为空，等于重新尝试。
 - `policy`：简报要附带的策略原文。它只进入 `realize`，只影响简报内容，不影响 id 或 pin。
@@ -215,8 +215,8 @@ review 的发现被驳回时，清单本身也会变（它包含「此前被驳�
       - 席位仍然需要，最近一次回执的 agent 已不可用（或还没有回执），并且没有待回执的 agent。简报写明「用原生 `task` 派出」。
     - 回执为 `Decision(seated{agentId})`。`admit` 核对该 agent 是待回执的 agent。回执之后 pin 改变，这张票据完结。
   - **wake：先回执，再执行**。重复唤醒无害，而唤醒之后席位就不再 parked，回执在执行之后已经无从核对。
-    - pin 为（agentId，该 agent 已有的 `woken` 回执数）；推导条件是该 agent 处于 parked。
-    - 回执为 `Decision(woken{agentId})`，之后主会话用原生 `write agent://` 唤醒；如果仍处于 parked，回执数已经加一，于是得出一张新票据。
+    - pin 为（agentId，该 agent 的 parked 期）。parked 期取 registry 观察中的 `parkedSince`，即它最近一次离开 running 的时间。推导条件是：该 agent 处于 parked，并且席位仍持有尚未完结的义务。
+    - 回执为 `Decision(woken{agentId, since})`，之后主会话立即用原生 `write agent://` 唤醒。同一个 parked 期内 pin 不变，回执完结这张票据后不再得出新票据；席位被唤醒、运行后再次 parked，才会开始新的 parked 期与新票据。
 
 ### 记录与 `Decision` 变体
 

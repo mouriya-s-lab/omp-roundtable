@@ -265,7 +265,7 @@ export type Decision =
   | { readonly subject: "report"; readonly summary: string }
   | { readonly subject: "noCode"; readonly member: IssueRef; readonly bodyHash: Hash; readonly reason: string }
   | { readonly subject: "seated"; readonly requestName: string; readonly previous: AgentId | null; readonly agentId: AgentId }
-  | { readonly subject: "woken"; readonly agentId: AgentId; readonly count: number };
+  | { readonly subject: "woken"; readonly agentId: AgentId; readonly since: Millis };
 
 export interface DecisionRecordBody {
   readonly kind: "decision";
@@ -358,6 +358,8 @@ export interface RegisteredAgent {
   readonly id: AgentId;
   readonly requestName: string;
   readonly status: RegistryStatus;
+  /** Non-null exactly when `status` is parked: when the agent last left running (registry `lifecycle.terminalAt`); identifies one parked episode. */
+  readonly parkedSince: Millis | null;
 }
 
 export interface EffectFailure {
