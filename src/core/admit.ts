@@ -122,6 +122,10 @@ export function admit(snap: Snapshot, host: Host, policy: Policy, caller: Caller
   // step 4: reply kind and decision variant
   if (!ob.accepts.includes(reply.kind)) return reject(`这张票据（${ob.kind}）不接受 ${reply.kind} 回复。`);
   if (reply.kind === "decision" && !decisionFits(ob, reply.decision)) return reject(`Decision(${reply.decision.subject}) 不属于票据 ${ob.kind} 可接受的变体。`);
+  if (reply.kind === "decision") {
+    const unbound = bindingMismatch(c, ob, reply.decision);
+    if (unbound !== null) return reject(unbound);
+  }
 
   // step 5: live preconditions
   const pre = preconditions(snap, c, ob, reply, facts);
@@ -173,6 +177,64 @@ const DECISION_SUBJECTS: Record<string, readonly Decision["subject"][]> = {
 
 function decisionFits(ob: Obligation, d: Decision): boolean {
   return (DECISION_SUBJECTS[ob.kind] ?? []).includes(d.subject);
+}
+
+/**
+ * The records, events and keys a decision names must be the ones its ticket is pinned to (core.md §4 admit step 4):
+ * a reply cannot answer one ticket while deciding another subject.
+ */
+function bindingMismatch(c: Classified, ob: Obligation, d: Decision): string | null {
+  const pin = canonical(c.pins.get(ob.id) ?? null);
+  const expect = (named: unknown, what: string): string | null =>
+    canonical(named) === pin ? null : `Decision 指向的${what}与这张票据钉住的不一致（票据 pin ${pin}）。`;
+  const reconcileMember = (): IssueRef | null =>
+    c.reconcile.find((r) => r.w.ids.decideReopened === ob.id || r.w.ids.decideClosed === ob.id)?.w.member ?? null;
+  switch (d.subject) {
+    case "question":
+    case "noCodeClaim":
+    case "splitClaim":
+    case "blockedClaim":
+      return expect(d.claim, "主张记录");
+    case "findings":
+    case "designFix":
+    case "postMergeFail":
+    case "closureFail":
+    case "unrelated":
+      return expect(d.verdictRecord, "结论记录");
+    case "checks": {
+      const pr = c.member?.w.pr?.ref ?? null;
+      if (pr === null || pr.number !== d.pr.number || pr.repo.owner !== d.pr.repo.owner || pr.repo.name !== d.pr.repo.name) return "Decision 指向的 PR 不是当前成员的 PR。";
+      return expect(d.runId, "check run");
+    }
+    case "reopened": {
+      const member = reconcileMember();
+      if (member === null || !sameIssue(member, d.member)) return "Decision 指向的成员不是这张票据的成员。";
+      return expect(d.event, "重开事件");
+    }
+    case "closed": {
+      const member = reconcileMember();
+      if (member === null || !sameIssue(member, d.member)) return "Decision 指向的成员不是这张票据的成员。";
+      return expect({ event: d.event, body: d.bodyHash }, "关闭事件与正文哈希");
+    }
+    case "orphanDesign":
+    case "migration":
+    case "agendaGap":
+      return expect(d.key, "主题");
+    case "stall":
+      // an effect-conflict ticket (also answered by `stall`) is pinned to its effect, not to a stall key
+      return ob.id === c.stall.id ? expect(d.key, "停滞状态") : null;
+    case "effectFailed":
+      return expect({ effect: d.effect, failedAt: d.failedAt }, "效应失败");
+    case "seated":
+      return expect({ requestName: d.requestName, previous: d.previous }, "席位与上一任 agent");
+    case "woken":
+      return expect({ agent: d.agentId, count: d.count }, "agent 与唤醒次数");
+    case "report":
+    case "noCode":
+      return null;
+    default:
+      return assertNever(d);
+  }
 }
 
 function preconditions(snap: Snapshot, c: Classified, ob: Obligation, reply: Reply, facts: AdmitFacts): string | null {
