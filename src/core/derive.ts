@@ -79,7 +79,7 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
     yieldAllowed: false,
     brief: briefFor(
       input,
-      { id, kind, context, requestName: opts.seat?.requestName ?? null, workDir: opts.seat?.workDir ?? null, pin: c.pins.get(id) ?? null, parent: snap.agenda.parent },
+      { id, kind, context, requestName: opts.seat?.requestName ?? null, workDir: opts.seat?.workDir ?? null, pin: c.pins.get(id) ?? null, parent: snap.agenda.parent, agenda: snap.agenda.record },
       policy,
     ),
   });

@@ -37,6 +37,8 @@ export interface BriefIdentity {
   readonly workDir: string | null;
   readonly pin: unknown;
   readonly parent: IssueRef | null;
+  /** Agenda issue: every record (reply, decision) is a signed comment on it. */
+  readonly agenda: IssueRef;
 }
 
 const issueUrl = (i: IssueRef): string => `https://github.com/${i.repo.owner}/${i.repo.name}/issues/${i.number}`;
@@ -62,6 +64,7 @@ function identityBlock(ident: BriefIdentity, completion: string): string {
     ident.workDir === null ? "" : `- 工作目录：${ident.workDir}。在这里基于远端提交另建 clone 或 worktree，不在继承来的隔离工作区里改动。`,
     `- pin：${canonical(ident.pin)}`,
     ident.parent === null ? "" : `- parent：${issueUrl(ident.parent)}`,
+    `- 议程 issue（全部记录所在）：${issueUrl(ident.agenda)}`,
     `- 完结方式：${completion}`,
   ]
     .filter((l) => l !== "")
@@ -85,16 +88,30 @@ function mainBrief(ident: BriefIdentity, title: string, facts: string, options: 
   ].join("\n\n");
 }
 
-function readingList(m: MemberWitness, parent: IssueRef | null): string {
+function readingList(m: MemberWitness, ident: BriefIdentity): string {
   return [
     "## 必读（动手前通读全文，不以 grep 代替）",
     `- issue 全文与全部评论：${issueUrl(m.entry.issue)}`,
-    parent === null ? "" : `- parent 的契约与设计修正评论：${issueUrl(parent)}`,
-    m.contractDecisions.length === 0 ? "" : `- 适用的契约裁定记录：${m.contractDecisions.join(", ")}（在 issue、parent 或 PR 的评论中）`,
+    ident.parent === null ? "" : `- parent 的契约与设计修正评论：${issueUrl(ident.parent)}`,
+    m.contractDecisions.length === 0 ? "" : `- 适用的契约裁定记录：${m.contractDecisions.join(", ")}（议程 issue ${issueUrl(ident.agenda)} 上的签名评论）`,
     "- issue 列出的全部设计章节、契约类型与例子。",
   ]
     .filter((l) => l !== "")
     .join("\n");
+}
+
+const ROUTES =
+  "设计路线：defaultFirst 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒就改选其他路线；withPr 的 commit 在设计分支上，由发现或提问所在的成员合入；future 需要同 repo 的后续承载者，没有就附设计承接项的草稿。";
+
+function recordFact(label: string, r: StoredRecord, ident: BriefIdentity): string {
+  return `- ${label} ${r.id}（议程 issue ${issueUrl(ident.agenda)} 上的签名评论）：${canonical(r.body)}`;
+}
+
+function memberFacts(m: MemberWitness): string {
+  return [
+    `- 成员：${issueUrl(m.entry.issue)}，当前正文哈希 ${m.issue?.bodyHash ?? "?"}`,
+    m.pr === null ? "- PR：尚无" : `- PR：${prUrl(m.pr.ref)}，head ${m.pr.head}，checks ${m.pr.checks.state}`,
+  ].join("\n");
 }
 
 export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy): string {
@@ -112,16 +129,18 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         ident,
         "推送分支后，用端口回复 `PrSubmit`（分支、观察到的 head、标题、正文、PR 模板类型；重试时加重试说明）。",
         [
-          readingList(m, ident.parent),
+          readingList(m, ident),
           [
             "## 交付",
-            `- 交付目标：${m.entry.target.repo.owner}/${m.entry.target.repo.name}，base ${m.entry.target.base}，起点 ${m.startSha ?? "为远端默认分支的当前 head"}。`,
+            `- 交付目标：${m.entry.target.repo.owner}/${m.entry.target.repo.name}，base ${m.entry.target.base}，起点：${m.startSha ?? "远端默认分支的当前 head"}。`,
             m.pr === null ? "- 新开分支；PR 由程序依据你的 PrSubmit 创建。" : `- 沿用 PR ${prUrl(m.pr.ref)}，当前 head ${m.pr.head}。`,
             m.designCommits.length > 0 ? `- 必须合入的设计 commit：${m.designCommits.join(", ")}（admit 会检查 head 是否包含它们）。` : "",
             "- PR 正文按 `writing-pr` 选模板：纯文档 PR 用思路要点模板；其他 PR 用四层证据：Layer 2 读回关键行，Layer 4 逐条经真实入口观察正负路径，测试计数只放卫生检查。",
             "- 发现无需代码、需要拆分，或被阻塞（例如推送被拒——不强推）时，回复 `Claim(noCode|split|blocked)`。",
             "- 续作时：先检查工作目录里未推送的提交。",
-            input.kind === "fix" && m.fixTrigger !== null ? `- 触发原因：${canonical(m.fixTrigger)}；读 PR 与 issue 上对应的记录。` : "",
+            input.kind === "fix" && m.fixTrigger !== null
+              ? `- 触发原因：${canonical(m.fixTrigger)}；其中的记录 id 是议程 issue ${issueUrl(ident.agenda)} 上的签名评论，check run 在 PR 的 checks 页。`
+              : "",
             pause,
           ]
             .filter((l) => l !== "")
@@ -136,7 +155,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         ident,
         "用端口回复 `Verdict(review)`：观察到的 head、Gate 1–5 各自状态、每个发现的 file:line、后果、复现命令、责任人。",
         [
-          readingList(m, ident.parent),
+          readingList(m, ident),
           [
             "## 做法",
             `- PR ${m.pr === null ? "?" : prUrl(m.pr.ref)}，HEAD ${m.pr?.head ?? "?"}，base ${m.entry.target.base}。在工作目录里干净 detached checkout 该 HEAD 并确认；HEAD 变化就停下回复。`,
@@ -153,7 +172,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         ident,
         "用端口回复 `Verdict(accept)`：观察到的 head、每条验收行 id 的命令、输出与判定、未覆盖项、无关失败。",
         [
-          readingList(m, ident.parent),
+          readingList(m, ident),
           [
             "## 做法",
             `- PR ${m.pr === null ? "?" : prUrl(m.pr.ref)}，HEAD ${m.pr?.head ?? "?"}。在工作目录里干净 detached checkout 该 HEAD 并确认。`,
@@ -200,53 +219,130 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         policy,
       );
     case "decideClaim":
-    case "decideVerificationClaim":
       return mainBrief(
         ident,
         "裁定契约问题或主张",
-        `记录 ${input.claim.id}：${canonical(input.claim.body)}`,
-        "question → answered | outOfDomain | implDefect | designGap(route) | acceptanceMethod（须附对当前成员验收行的正文替换）；noCode/split → confirmed | refuted；blocked → replacePr | external | refuted。设计路线：defaultFirst 仅在约定契约修正先落默认分支、且允许直接提交时可选，推送被拒就改选其他路线；withPr 由提问的成员合入设计分支上的 commit；future 需要同 repo 的后续承载者，没有就附设计承接项草稿。正文替换须附当前正文哈希作为基准。",
+        [recordFact("主张", input.claim, ident), memberFacts(input.member)].join("\n"),
+        [
+          "question：",
+          "- answered 或 outOfDomain：主张结束，owner 按你的答复继续原票据。",
+          "- implDefect：owner 得到修复票据。",
+          `- designGap(route)：改变契约，已有结论失效、gate 重新执行。${ROUTES}`,
+          `- acceptanceMethod：改变契约，须附对成员验收行的正文替换，基准为当前正文哈希 ${input.member.issue?.bodyHash ?? "?"}；gate 重新执行。`,
+          "noCode / split：confirmed 改变结局（noCode 结束该成员；split 须附拆分后的正文替换与草稿）；refuted 让 owner 继续原票据。",
+          "blocked：replacePr 放弃当前 PR，owner 以新的 attempt 重新交付；external 让该成员进入等待集合，须立即报告操作员；refuted 让 owner 继续。",
+        ].join("\n"),
+      );
+    case "decideVerificationClaim":
+      return mainBrief(
+        ident,
+        "裁定验收席位的契约问题",
+        recordFact("主张", input.claim, ident),
+        [
+          "- answered 或 outOfDomain：主张结束，席位按你的答复继续原票据。",
+          `- designGap(route)：改变契约。${ROUTES}`,
+          "- acceptanceMethod：改变契约，须附正文替换，基准为被替换正文的当前哈希。",
+        ].join("\n"),
       );
     case "decideFindings":
       return mainBrief(
         ident,
         "裁定 gate 发现",
-        `结论 ${input.verdict.id}：${canonical(input.verdict.body)}`,
-        "对每个发现：upheld(owner|main) | rejected(依据) | outOfScope(附草稿) | designGap(route) | acceptanceMethod（须附正文替换）。",
+        [recordFact("结论", input.verdict, ident), memberFacts(input.member)].join("\n"),
+        [
+          "对每个发现分别裁定：",
+          "- upheld(owner)：owner 得到修复票据；upheld(main)：你得到 designFix 票据，在设计分支上修复。",
+          "- rejected(依据)：发现作废；这条结论的发现全部为 rejected 或 outOfScope 时，该 gate 以新的 attempt 重新执行，review 清单会带上被驳回的发现。",
+          "- outOfScope(附草稿)：发现移出本 PR，草稿由程序建成新 issue。",
+          `- designGap(route)：改变契约，已有结论失效、gate 重新执行。${ROUTES}`,
+          `- acceptanceMethod：改变契约，须附对成员验收行的正文替换，基准为当前正文哈希 ${input.member.issue?.bodyHash ?? "?"}；gate 重新执行。`,
+        ].join("\n"),
       );
     case "designFix":
-      return mainBrief(ident, "修复设计 commit 上被维持的发现", `结论 ${input.verdict.id}：${canonical(input.verdict.body)}`, "在设计分支上修复后，回复 Decision(designFix) 附 commit；owner 会被要求合入。");
+      return mainBrief(
+        ident,
+        "修复设计 commit 上被维持的发现",
+        [recordFact("结论", input.verdict, ident), memberFacts(input.member)].join("\n"),
+        "在设计分支上修复后，回复 Decision(designFix) 附 commit；之后 owner 得到合入该 commit 的修复票据，gate 重新执行。",
+      );
     case "decideChecks":
       return mainBrief(
         ident,
         "checks 在同一个 head 上反复失败",
-        `PR ${input.member.pr === null ? "?" : prUrl(input.member.pr.ref)}，失败 run ${input.member.failedRun ?? "?"}`,
-        "rerun | fixNeeded | external（external 须立即报告操作员）。",
+        [`- 失败 run：${input.member.failedRun ?? "?"}（owner 已就这个 run 完成过一次修复）`, memberFacts(input.member)].join("\n"),
+        [
+          "- rerun：程序重跑 checks；之后仍失败，交给下一次 decide(checks)。",
+          "- fixNeeded：owner 得到修复票据，须推送新 head。",
+          "- external：该成员进入等待集合，须立即报告操作员。",
+        ].join("\n"),
       );
     case "decideReopened":
       return mainBrief(
         ident,
         "结局确立后 issue 被重新打开",
-        `成员 ${issueUrl(input.reconcile.member)}，事件 ${input.reconcile.eventForDecision ?? "?"}`,
-        "restore | correction(附修正草稿，锚点 correctionOf)；成员结局为 noCode 时还可选 reopenAccepted（撤销确认，回到待交付）。",
+        `- 成员：${issueUrl(input.reconcile.member)}\n- 重开事件：${input.reconcile.eventForDecision ?? "?"}`,
+        [
+          "- restore：程序重新关闭该 issue。",
+          "- correction(附修正草稿，锚点 correctionOf)：草稿建成新 issue 并进入议程；单元重新通过 postMerge 之后，程序关闭该 issue。",
+          "- reopenAccepted（仅限结局为 noCode 的成员）：撤销 noCode 确认，成员回到待交付。",
+        ].join("\n"),
       );
     case "decideClosed":
       return mainBrief(
         ident,
         "待交付成员已被关闭",
-        `成员 ${issueUrl(input.reconcile.member)}，事件 ${input.reconcile.eventForDecision ?? "?"}，正文哈希 ${input.reconcile.bodyHash ?? "?"}`,
-        "confirmedNoCode(附理由) | reopen。",
+        `- 成员：${issueUrl(input.reconcile.member)}\n- 关闭事件：${input.reconcile.eventForDecision ?? "?"}\n- 当前正文哈希：${input.reconcile.bodyHash ?? "?"}`,
+        [
+          "- confirmedNoCode(附理由)：成员结局为 noCode，裁定钉住当前正文哈希；正文之后变化则失效。",
+          "- reopen：程序重新打开该 issue，成员继续交付。",
+        ].join("\n"),
       );
     case "decidePostMergeFail":
-      return mainBrief(ident, "合并后验收失败", `结论 ${input.verdict.id}：${canonical(input.verdict.body)}`, "correction(附修正草稿，锚点 correctionOf) | reverify。");
+      return mainBrief(
+        ident,
+        "合并后验收失败",
+        recordFact("结论", input.verdict, ident),
+        [
+          "- correction(附修正草稿，锚点 correctionOf)：草稿建成新 issue 并插入议程，修正落地后再验收。",
+          "- reverify：以新的 attempt 在同一提交上重新验收。",
+        ].join("\n"),
+      );
     case "decideClosureFail":
-      return mainBrief(ident, "树关闭验收失败", `结论 ${input.verdict.id}：${canonical(input.verdict.body)}`, "补项草稿 | reverify。");
+      return mainBrief(
+        ident,
+        "树关闭验收失败",
+        recordFact("结论", input.verdict, ident),
+        ["- 补项草稿：建成新 issue 并插入议程，落地后再做关闭验收。", "- reverify：以新的 attempt 重新做关闭验收。"].join("\n"),
+      );
     case "decideSubject":
-      return mainBrief(ident, `裁定 ${input.subject.subject}`, canonical(input.subject), "附草稿或插入；或 external（须立即报告操作员）。");
+      return mainBrief(
+        ident,
+        `裁定 ${input.subject.subject}`,
+        input.subject.subject === "unrelated" ? recordFact("结论", input.subject.verdict, ident) : `- ${canonical(input.subject)}`,
+        input.subject.subject === "unrelated"
+          ? "- 附草稿（锚点「不进议程」）：把无关失败建成新 issue；它不阻塞当前单元。"
+          : [
+              "- resolved(附草稿或插入)：补上缺失的承载者、迁移或议程项。",
+              "- external：进入等待集合，须立即报告操作员。",
+            ].join("\n"),
+      );
     case "decideEffectFailed":
-      return mainBrief(ident, "程序效应执行失败", `效应 ${input.effect.id}（${input.effect.target.kind}）：${canonical(input.effect.target)}`, "retry | external（须立即报告操作员）。");
+      return mainBrief(
+        ident,
+        "程序效应执行失败",
+        `- 效应 ${input.effect.id}（${input.effect.target.kind}）：${canonical(input.effect.target)}`,
+        [
+          "- retry：只放行这一次失败，程序重新执行；再失败会得到新的票据。",
+          "- external：该裁定有效期间不再执行，进入等待集合，须立即报告操作员。",
+        ].join("\n"),
+      );
     case "decideEffectConflict":
-      return mainBrief(ident, "正文替换的基准哈希已不符", `效应 ${input.effect.id}：${canonical(input.effect.target)}`, "重新读取当前正文后，以新的裁定给出替换，或说明放弃。");
+      return mainBrief(
+        ident,
+        "正文替换的基准哈希已不符",
+        `- 效应 ${input.effect.id}：${canonical(input.effect.target)}`,
+        "- 重新读取当前正文后，以新的裁定给出替换（基准为当前哈希），或说明放弃。",
+      );
     case "report":
       return mainBrief(
         ident,
