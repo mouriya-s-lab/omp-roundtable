@@ -132,7 +132,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
           readingList(m, ident),
           [
             "## 交付",
-            `- 交付目标：${m.entry.target.repo.owner}/${m.entry.target.repo.name}，base ${m.entry.target.base}，起点：${m.startSha ?? "远端默认分支的当前 head"}。`,
+            `- 交付目标：${m.entry.target.repo.owner}/${m.entry.target.repo.name}，base ${m.entry.target.base}，起点：${m.startSha ?? `远端 ${m.entry.target.base} 分支的当前 head`}。`,
             m.pr === null ? "- 新开分支；PR 由程序依据你的 PrSubmit 创建。" : `- 沿用 PR ${prUrl(m.pr.ref)}，当前 head ${m.pr.head}。`,
             m.designCommits.length > 0 ? `- 必须合入的设计 commit：${m.designCommits.join(", ")}（admit 会检查 head 是否包含它们）。` : "",
             "- PR 正文按 `writing-pr` 选模板：纯文档 PR 用思路要点模板；其他 PR 用四层证据：Layer 2 读回关键行，Layer 4 逐条经真实入口观察正负路径，测试计数只放卫生检查。",

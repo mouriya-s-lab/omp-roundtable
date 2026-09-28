@@ -114,7 +114,7 @@ export function initialWorld(spec: AgendaSpec): World {
       },
       issues: [agenda, ...members, ...parent],
       prs: [],
-      commits: { onDefault: [{ repo, sha: sha("base0") }], contains: [], defaultHead: [{ repo, sha: sha("base0") }] },
+      commits: { onDefault: [{ repo, sha: sha("base0") }], contains: [], defaultHead: [{ repo, sha: sha("base0") }], baseHead: [] },
       records: [],
       effectMarkers: [],
     },

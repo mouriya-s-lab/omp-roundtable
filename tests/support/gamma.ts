@@ -208,7 +208,7 @@ class Assembly {
       },
       issues: this.issues,
       prs: [...this.prs, ...noisePrs],
-      commits: { onDefault: this.onDefault.map((sha) => ({ repo: this.v.repo, sha })), contains: [], defaultHead: [] },
+      commits: { onDefault: this.onDefault.map((sha) => ({ repo: this.v.repo, sha })), contains: [], defaultHead: [], baseHead: [] },
       records: [...noiseRecords, ...this.records],
       effectMarkers: [...noiseMarkers, ...this.markers],
     };
