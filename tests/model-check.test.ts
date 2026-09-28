@@ -100,7 +100,7 @@ describe("model checking (core.md §6.3)", () => {
       "spawn: seated", "wake: woken",
       // program effects, including failures
       "effect openPr", "effect updatePr", "effect applyBody", "effect createIssue", "effect noticeDecision", "effect rerunChecks",
-      "effect closeAgenda", "effect attachAgenda", "effect openPr fails", "noticeForeignPr",
+      "effect closeAgenda", "effect attachAgenda", "effect openPr fails", "effect openPr fails again after retry", "noticeForeignPr",
       "merge (issue auto-closed)", "merge (no auto-close)", "program close", "program reopen", "program closeParent",
       // perturbations and fairness
       "perturb: push new head", "perturb: member body edited", "perturb: human close member", "perturb: human reopen member",

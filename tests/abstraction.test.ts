@@ -1,87 +1,112 @@
-// core.md §6.2 抽象层: every Situation in a systematic subset gets two structurally different concrete Snapshots
-// (γ1, γ2); both must classify to exactly that Situation, and derive must realize exactly the rules' obligations.
+// core.md §6.2 抽象层. Every consistent value of ReconcileSituation, VerificationSituation and ClosureSituation, and
+// for MemberSituation a systematic cover plus a fixed-seed random sample of consistent values, gets two structurally
+// different concrete Snapshots (γ1, γ2). Both must classify to exactly that value, and derive must realize exactly
+// the rules' obligations for it. A value is only left out when it breaks a named constraint (support/consistency.ts).
 
 import { describe, expect, test } from "bun:test";
-import { canonical, derive, memberRules, reconcileRules, verificationRules, type Derived, type Spec } from "../src/core/index.ts";
-import type { MemberSituation, ReconcileSituation, VerificationSituation } from "../src/core/index.ts";
-import type { Classified } from "../src/core/classify.ts";
-import { memberDomain, reconcileDomain, verificationDomain } from "./support/domains.ts";
-import { MEMBER_CONSTRAINTS, RECONCILE_CONSTRAINTS, VERIFICATION_CONSTRAINTS, violations } from "./support/consistency.ts";
 import {
+  canonical,
+  closureRules,
+  derive,
+  memberRules,
+  reconcileRules,
+  verificationRules,
+  type Derived,
+  type Spec,
+} from "../src/core/index.ts";
+import type { ClosureSituation, MemberSituation, ReconcileSituation, VerificationSituation } from "../src/core/index.ts";
+import type { Classified } from "../src/core/classify.ts";
+import { closureDomain, memberDomain, reconcileDomain, verificationDomain } from "./support/domains.ts";
+import {
+  CLOSURE_CONSTRAINTS,
+  MEMBER_CONSTRAINTS,
+  RECONCILE_CONSTRAINTS,
+  VERIFICATION_CONSTRAINTS,
+  violations,
+  type Constraint,
+} from "./support/consistency.ts";
+import {
+  closureGamma,
   memberGamma,
   reconcileGamma,
-  reconcileRecipes,
+  searchReconcile,
   verificationGamma,
   verificationRecipes,
   VARIANTS,
   type Built,
-  type ReconcileRecipe,
   type Variant,
   type VerificationRecipe,
 } from "./support/gamma.ts";
-import { enumerate, systematicSubset } from "./support/product.ts";
+import { domainSize, enumerate, systematicSubset, valueAt, type Domain } from "./support/product.ts";
 import { policy } from "./support/world.ts";
-
-const MEMBER_KINDS = ["decideClaim", "deliver", "noticeForeignPr", "decideFindings", "fix", "designFix", "decideChecks", "review", "accept", "merge"];
-const RECONCILE_KINDS = ["close", "reopen", "decideReopened", "decideClosed"];
-const VERIFICATION_KINDS = ["decideClaim", "postMerge", "decidePostMergeFail"];
 
 const specKey = (specs: readonly Spec<string>[]): string => specs.map((s) => `${s.kind}/${s.holder}`).sort().join(",");
 
-interface Outcome {
-  readonly cases: number;
-  readonly built: number;
-  readonly infeasible: Map<string, number>;
-  readonly failures: string[];
+interface Layer<T> {
+  readonly gamma: (t: T, v: Variant) => Built;
+  readonly situationOf: (c: Classified, v: Variant) => T | null;
+  /** Obligations derive realized in the target's context, as `kind/holder`, sorted. */
+  readonly realized: (d: Derived, v: Variant) => string;
+  readonly rules: (t: T) => string;
 }
 
-/**
- * For each target: γ1 and γ2 must both be built (or both infeasible for the same reason), classify to the target,
- * and derive the rules' obligations (kind and holder) in the target's context.
- */
-function check<T>(
-  targets: Iterable<T>,
-  gamma: (t: T, v: Variant) => Built,
-  situationOf: (c: Classified) => T | null,
-  realized: (d: Derived, v: Variant) => string,
-  rules: (t: T) => string,
-): Outcome {
-  const infeasible = new Map<string, number>();
-  const failures: string[] = [];
-  let cases = 0;
-  let built = 0;
-  for (const t of targets) {
-    cases++;
-    const results = VARIANTS.map((v) => ({ v, b: gamma(t, v) }));
-    const [first] = results;
-    if (first !== undefined && first.b.kind === "infeasible") {
-      infeasible.set(first.b.reason, (infeasible.get(first.b.reason) ?? 0) + 1);
+interface Tally {
+  checked: number;
+  constructed: number;
+  failures: string[];
+}
+
+/** γ1 and γ2 of one consistent target: both built, both classify to it, both realize its rules. */
+function checkTarget<T>(t: T, layer: Layer<T>, tally: Tally): void {
+  tally.checked++;
+  let ok = true;
+  for (const v of VARIANTS) {
+    const b = layer.gamma(t, v);
+    if (b.kind === "infeasible") {
+      tally.failures.push(`${v.name}: consistent value not constructible (${b.reason}): ${canonical(t)}`);
+      ok = false;
       continue;
     }
-    built++;
-    for (const { v, b } of results) {
-      if (b.kind === "infeasible") {
-        failures.push(`${v.name} infeasible (${b.reason}) for ${canonical(t)}`);
-        continue;
-      }
-      const d = derive(b.snap, b.host, policy);
-      const got = situationOf(d.classified);
-      if (canonical(got) !== canonical(t)) {
-        failures.push(`${v.name} classified ${canonical(got)}\n   wanted ${canonical(t)}`);
-        continue;
-      }
-      const want = rules(t);
-      const have = realized(d, v);
-      if (want !== have) failures.push(`${v.name} realized [${have}] but rules give [${want}] for ${canonical(t)}`);
+    const d = derive(b.snap, b.host, policy);
+    const got = layer.situationOf(d.classified, v);
+    if (canonical(got) !== canonical(t)) {
+      tally.failures.push(`${v.name} classified ${canonical(got)}\n     wanted ${canonical(t)}`);
+      ok = false;
+      continue;
+    }
+    const have = layer.realized(d, v);
+    const want = layer.rules(t);
+    if (have !== want) {
+      tally.failures.push(`${v.name} realized [${have}] but rules give [${want}] for ${canonical(t)}`);
+      ok = false;
     }
   }
-  return { cases, built, infeasible, failures };
+  if (ok) tally.constructed++;
 }
 
-function reportOutcome(name: string, o: Outcome): void {
-  console.log(`[abstraction] ${name}: ${o.cases} cases, ${o.built} constructed ×2 (γ1, γ2), ${o.cases - o.built} not constructible, ${o.failures.length} failures`);
-  for (const [reason, n] of o.infeasible) console.log(`  not constructible ×${n}: ${reason}`);
-  for (const f of o.failures.slice(0, 15)) console.log(`  FAIL ${f}`);
+/** Consistent count and per-constraint exclusion counts over a whole domain. */
+function census<T>(domain: Domain<T>, constraints: readonly Constraint<T>[]): { consistent: T[]; excluded: number; byConstraint: Map<string, number> } {
+  const consistent: T[] = [];
+  const byConstraint = new Map<string, number>();
+  let excluded = 0;
+  for (const t of enumerate(domain)) {
+    const broken = violations(constraints, t);
+    if (broken.length === 0) consistent.push(t);
+    else {
+      excluded++;
+      for (const b of broken) byConstraint.set(b, (byConstraint.get(b) ?? 0) + 1);
+    }
+  }
+  return { consistent, excluded, byConstraint };
+}
+
+function printCensus(name: string, size: number, consistent: number, excluded: number, byConstraint: Map<string, number>, tally: Tally): void {
+  console.log(
+    `[abstraction] ${name}: domain ${size}, consistent ${consistent}, excluded by constraint ${excluded}; ` +
+      `checked ${tally.checked}, constructed ×2 (γ1, γ2) ${tally.constructed}, failures ${tally.failures.length}`,
+  );
+  for (const [c, n] of byConstraint) console.log(`  excluded: ${n} values break «${c}»`);
+  for (const f of tally.failures.slice(0, 15)) console.log(`  FAIL ${f}`);
 }
 
 const ctxOf = (v: Variant): string => `${v.repo.owner}/${v.repo.name}#${v.member}`;
@@ -92,8 +117,34 @@ const realizedIn = (kinds: readonly string[], context: (v: Variant) => string) =
     .sort()
     .join(",");
 
+const MEMBER_KINDS = ["decideClaim", "deliver", "noticeForeignPr", "decideFindings", "fix", "designFix", "decideChecks", "review", "accept", "merge"];
+const RECONCILE_KINDS = ["close", "reopen", "decideReopened", "decideClosed"];
+const VERIFICATION_KINDS = ["decideClaim", "postMerge", "decidePostMergeFail"];
+const CLOSURE_KINDS = ["decideClaim", "closure", "decideClosureFail", "closeParent", "reopenParent", "report"];
+
+const memberLayer: Layer<MemberSituation> = {
+  gamma: memberGamma,
+  situationOf: (c) => c.member?.s ?? null,
+  realized: realizedIn(MEMBER_KINDS, ctxOf),
+  rules: (t) => specKey(memberRules(t)),
+};
+
+/** Deterministic LCG (fixed seed) so the sample is the same on every run. */
+function sampler(seed: number): () => number {
+  let x = seed;
+  return () => {
+    x = (Math.imul(x, 1103515245) + 12345) & 0x7fffffff;
+    return x / 0x80000000;
+  };
+}
+
+const MEMBER_SAMPLE = 5_000;
+const MEMBER_SEED = 20_260_929;
+
 describe("abstraction layer (core.md §6.2)", () => {
-  test("MemberSituation: baseline, every single dimension, claim × ours × review × accept × materialized", () => {
+  test("MemberSituation: systematic cover and a fixed-seed random sample of consistent values", () => {
+    const { byConstraint, excluded } = census(memberDomain, MEMBER_CONSTRAINTS);
+    const size = domainSize(memberDomain);
     const baseline: MemberSituation = {
       designOnly: false,
       claim: "none",
@@ -113,53 +164,57 @@ describe("abstraction layer (core.md §6.2)", () => {
       fixDone: false,
       externalBlock: false,
     };
-    // the combination axes of the assignment, plus those that make each claimed-infeasible value constructible elsewhere
-    const subset = systematicSubset(memberDomain, baseline, ["claim", "ours", "review", "accept", "materialized"]);
-    const o = check(subset, memberGamma, (c) => c.member?.s ?? null, realizedIn(MEMBER_KINDS, ctxOf), (t) => specKey(memberRules(t)));
-    reportOutcome("MemberSituation", o);
-    expect(o.failures).toEqual([]);
-    // every non-constructible value is one the consistency constraints rule out (checked against classify by the model checker)
-    for (const reason of o.infeasible.keys()) expect(MEMBER_CONSTRAINTS.some((c) => reason.includes(c.name))).toBe(true);
-  });
-
-  test("ReconcileSituation: baseline, every single dimension, outcome × open × reopenDecision × closedDecision", () => {
-    const recipes = new Map<string, ReconcileRecipe>();
-    for (const r of reconcileRecipes()) {
-      const b = reconcileGamma(r, VARIANTS[0]);
-      if (b.kind === "infeasible") continue;
-      const c = derive(b.snap, b.host, policy).classified.reconcile.find((x) => x.w.member.number === VARIANTS[0].member);
-      if (c !== undefined && !recipes.has(canonical(c.s))) recipes.set(canonical(c.s), r);
-    }
-    const baseline: ReconcileSituation = {
-      outcome: "delivered",
-      open: false,
-      neverClosedSinceOutcome: false,
-      reopenUndecided: false,
-      reopenDecision: "none",
-      closedUndecided: false,
-      closedDecision: "none",
-      unitPostMergePass: false,
-    };
-    const subset = systematicSubset(reconcileDomain, baseline, ["outcome", "open", "reopenDecision", "closedDecision"]);
-    const o = check(
-      subset,
-      (t, v) => {
-        const r = recipes.get(canonical(t));
-        if (r !== undefined) return reconcileGamma(r, v);
-        const broken = violations(RECONCILE_CONSTRAINTS, t);
-        return { kind: "infeasible", reason: broken.length > 0 ? broken.join("; ") : "no recipe produces it" };
-      },
-      (c) => c.reconcile.find((x) => x.w.member.number === VARIANTS[0].member || x.w.member.number === VARIANTS[1].member)?.s ?? null,
-      realizedIn(RECONCILE_KINDS, ctxOf),
-      (t: ReconcileSituation) => specKey(reconcileRules(t)),
+    const systematic = systematicSubset(memberDomain, baseline, ["claim", "ours", "review", "accept", "materialized"]).filter(
+      (t) => violations(MEMBER_CONSTRAINTS, t).length === 0,
     );
-    reportOutcome("ReconcileSituation", o);
-    console.log(`  recipe search reached ${recipes.size} of ${[...enumerate(reconcileDomain)].length} ReconcileSituation values`);
-    expect(o.failures).toEqual([]);
-    expect(o.infeasible.get("no recipe produces it") ?? 0).toBe(0);
-  });
+    const cover: Tally = { checked: 0, constructed: 0, failures: [] };
+    for (const t of systematic) checkTarget(t, memberLayer, cover);
+    const sample: Tally = { checked: 0, constructed: 0, failures: [] };
+    const next = sampler(MEMBER_SEED);
+    const seen = new Set<string>();
+    while (sample.checked < MEMBER_SAMPLE) {
+      const t = valueAt(memberDomain, Math.floor(next() * size));
+      const k = canonical(t);
+      if (seen.has(k) || violations(MEMBER_CONSTRAINTS, t).length > 0) continue;
+      seen.add(k);
+      checkTarget(t, memberLayer, sample);
+    }
+    printCensus("MemberSituation systematic cover", size, size - excluded, excluded, byConstraint, cover);
+    console.log(
+      `[abstraction] MemberSituation random sample (seed ${MEMBER_SEED}): checked ${sample.checked} distinct consistent values, ` +
+        `constructed ×2 (γ1, γ2) ${sample.constructed}, failures ${sample.failures.length}`,
+    );
+    for (const f of sample.failures.slice(0, 15)) console.log(`  FAIL ${f}`);
+    expect(cover.failures).toEqual([]);
+    expect(sample.failures).toEqual([]);
+    expect(cover.constructed).toBe(cover.checked);
+    expect(sample.constructed).toBe(MEMBER_SAMPLE);
+  }, 300_000);
 
-  test("VerificationSituation: every value", () => {
+  test("ReconcileSituation: every consistent value", () => {
+    const { consistent, excluded, byConstraint } = census(reconcileDomain, RECONCILE_CONSTRAINTS);
+    const histories = searchReconcile(6);
+    const tally: Tally = { checked: 0, constructed: 0, failures: [] };
+    const layer: Layer<ReconcileSituation> = {
+      gamma: (t, v) => {
+        const h = histories.get(canonical(t));
+        return h === undefined ? { kind: "infeasible", reason: "no history up to 6 steps classifies to it" } : reconcileGamma(h, v);
+      },
+      situationOf: (c, v) => c.reconcile.find((x) => x.w.member.number === v.member)?.s ?? null,
+      realized: realizedIn(RECONCILE_KINDS, ctxOf),
+      rules: (t) => specKey(reconcileRules(t)),
+    };
+    for (const t of consistent) checkTarget(t, layer, tally);
+    // the history search must never reach a value the constraints call inconsistent (that would make a constraint false)
+    const falseExclusions = [...histories.keys()].filter((k) => violations(RECONCILE_CONSTRAINTS, JSON.parse(k) as ReconcileSituation).length > 0);
+    printCensus("ReconcileSituation", domainSize(reconcileDomain), consistent.length, excluded, byConstraint, tally);
+    expect(falseExclusions).toEqual([]);
+    expect(tally.failures).toEqual([]);
+    expect(tally.constructed).toBe(consistent.length);
+  }, 120_000);
+
+  test("VerificationSituation: every consistent value", () => {
+    const { consistent, excluded, byConstraint } = census(verificationDomain, VERIFICATION_CONSTRAINTS);
     const recipes = new Map<string, VerificationRecipe>();
     for (const r of verificationRecipes()) {
       const b = verificationGamma(r, VARIANTS[0]);
@@ -167,21 +222,36 @@ describe("abstraction layer (core.md §6.2)", () => {
       const v = derive(b.snap, b.host, policy).classified.verification;
       if (v !== null && !recipes.has(canonical(v.s))) recipes.set(canonical(v.s), r);
     }
-    const o = check(
-      enumerate(verificationDomain),
-      (t: VerificationSituation, v) => {
+    const tally: Tally = { checked: 0, constructed: 0, failures: [] };
+    const layer: Layer<VerificationSituation> = {
+      gamma: (t, v) => {
         const r = recipes.get(canonical(t));
-        if (r !== undefined) return verificationGamma(r, v);
-        const broken = violations(VERIFICATION_CONSTRAINTS, t);
-        return { kind: "infeasible", reason: broken.length > 0 ? broken.join("; ") : "no recipe produces it" };
+        return r === undefined ? { kind: "infeasible", reason: "no recipe classifies to it" } : verificationGamma(r, v);
       },
-      (c) => c.verification?.s ?? null,
-      realizedIn(VERIFICATION_KINDS, (v) => `verify:${ctxOf(v)}`),
-      (t) => specKey(verificationRules(t)),
-    );
-    reportOutcome("VerificationSituation", o);
-    expect(o.failures).toEqual([]);
-    // every consistent value is constructed
-    expect(o.infeasible.get("no recipe produces it") ?? 0).toBe(0);
+      situationOf: (c) => c.verification?.s ?? null,
+      realized: realizedIn(VERIFICATION_KINDS, (v) => `verify:${ctxOf(v)}`),
+      rules: (t) => specKey(verificationRules(t)),
+    };
+    for (const t of consistent) checkTarget(t, layer, tally);
+    const falseExclusions = [...recipes.keys()].filter((k) => violations(VERIFICATION_CONSTRAINTS, JSON.parse(k) as VerificationSituation).length > 0);
+    printCensus("VerificationSituation", domainSize(verificationDomain), consistent.length, excluded, byConstraint, tally);
+    expect(falseExclusions).toEqual([]);
+    expect(tally.failures).toEqual([]);
+    expect(tally.constructed).toBe(consistent.length);
+  });
+
+  test("ClosureSituation: every consistent value", () => {
+    const { consistent, excluded, byConstraint } = census(closureDomain, CLOSURE_CONSTRAINTS);
+    const tally: Tally = { checked: 0, constructed: 0, failures: [] };
+    const layer: Layer<ClosureSituation> = {
+      gamma: closureGamma,
+      situationOf: (c) => c.closure.s,
+      realized: realizedIn(CLOSURE_KINDS, () => "closure"),
+      rules: (t) => specKey(closureRules(t)),
+    };
+    for (const t of consistent) checkTarget(t, layer, tally);
+    printCensus("ClosureSituation", domainSize(closureDomain), consistent.length, excluded, byConstraint, tally);
+    expect(tally.failures).toEqual([]);
+    expect(tally.constructed).toBe(consistent.length);
   });
 });

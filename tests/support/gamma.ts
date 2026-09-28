@@ -1,7 +1,7 @@
 // γ: concrete Snapshots for a given abstract Situation (core.md §6.2 抽象层).
 // Each constructor is parametrised by a Variant so γ₁ and γ₂ differ in numbers, ids, timestamps and irrelevant records.
 
-import { classify, fnv64, obligationId } from "../../src/core/index.ts";
+import { canonical, classify, fnv64, obligationId } from "../../src/core/index.ts";
 import type {
   AgentId,
   Author,
@@ -11,12 +11,14 @@ import type {
   DraftId,
   Observed,
   EventId,
+  LifecycleEvent,
   FindingVerdict,
   Hash,
   Host,
   IssueFact,
   IssueRef,
   Manifest,
+  ClosureSituation,
   MemberSituation,
   Millis,
   ObligationId,
@@ -31,7 +33,7 @@ import type {
   Verdict,
 } from "../../src/core/index.ts";
 import type { Classified } from "../../src/core/classify.ts";
-import { MEMBER_CONSTRAINTS, violations } from "./consistency.ts";
+import { CLOSURE_CONSTRAINTS, MEMBER_CONSTRAINTS, violations } from "./consistency.ts";
 
 export interface Variant {
   readonly name: string;
@@ -335,70 +337,149 @@ function finding(id: string): { id: string; location: string; consequence: strin
 }
 
 
-// ------------------------------------------------------------------ reconcile and verification: recipe search
-// These situations are small products; γ enumerates a finite space of concrete recipes and keeps, per Situation,
-// the first recipe whose γ1 classifies to it. γ2 replays the same recipe under the other Variant.
+// ------------------------------------------------------------------ reconcile: history search
+// A reconcile history is a timeline of facts and records on M; each token is one step, in time order. Decisions pin the
+// latest event of their kind at the moment they are written (closed decisions also the body hash of that moment).
+// γ searches histories up to a bounded length and keeps, per ReconcileSituation, the first one; γ2 replays it under the
+// other Variant. Histories are only timeline-consistent: they need not be admissible step by step, since classify reads
+// any verified record set.
 
-export interface ReconcileRecipe {
-  readonly outcome: "delivered" | "noCode" | "pending";
-  /** Human lifecycle events on M in order (C = closed, R = reopened). */
-  readonly events: "" | "C" | "CR" | "CRC";
-  /** Number of events that happen before the outcome is established. */
-  readonly outcomeAfter: number;
-  readonly reopenDecision: "none" | "restore" | "correction" | "reopenAccepted";
-  readonly closedDecision: "none" | "reopen" | "confirmedNoCode";
+/**
+ * C/O: human close/reopen. M: a PR closing M merges. N: Main's unsolicited noCode confirmation. X: a noCode claim and
+ * its refutation. Kn/Kr: closed decision (confirmedNoCode/reopen) on the latest close. Rs/Rc/Ra: reopened decision
+ * (restore/correction/reopenAccepted) on the latest reopen. B: M's body is edited.
+ */
+export type ReconcileToken = "C" | "O" | "M" | "N" | "X" | "Kn" | "Kr" | "Rs" | "Rc" | "Ra" | "B";
+export const RECONCILE_TOKENS: readonly ReconcileToken[] = ["C", "O", "M", "N", "X", "Kn", "Kr", "Rs", "Rc", "Ra", "B"];
+
+export interface ReconcileHistory {
+  readonly steps: readonly ReconcileToken[];
+  /** The unit carries a passing postMerge verdict on the current manifest at the end. */
   readonly postMergePass: boolean;
 }
 
-export function* reconcileRecipes(): Generator<ReconcileRecipe> {
-  for (const outcome of ["delivered", "noCode", "pending"] as const)
-    for (const events of ["", "C", "CR", "CRC"] as const)
-      for (let outcomeAfter = 0; outcomeAfter <= events.length; outcomeAfter++)
-        for (const reopenDecision of ["none", "restore", "correction", "reopenAccepted"] as const)
-          for (const closedDecision of ["none", "reopen", "confirmedNoCode"] as const)
-            for (const postMergePass of [false, true]) yield { outcome, events, outcomeAfter, reopenDecision, closedDecision, postMergePass };
+/** Whether `token` can follow `steps` (the issue alternates closed/reopened; a PR merges once; pins need an event). */
+export function reconcileTokenApplies(steps: readonly ReconcileToken[], token: ReconcileToken): boolean {
+  const events = steps.filter((s) => s === "C" || s === "O");
+  const open = events.length === 0 || events.at(-1) === "O";
+  switch (token) {
+    case "C":
+      return open;
+    case "O":
+      return !open;
+    case "M":
+      return !steps.includes("M");
+    case "Kn":
+    case "Kr":
+      return events.includes("C");
+    case "Rs":
+    case "Rc":
+    case "Ra":
+      return events.includes("O");
+    case "N":
+    case "X":
+    case "B":
+      return true;
+  }
 }
 
-export function reconcileGamma(r: ReconcileRecipe, v: Variant): Built {
+/**
+ * Breadth-first search over histories up to `maxSteps`, keeping per ReconcileSituation the first history (γ1) that
+ * classifies to it. Frontier histories are merged when they agree on the situation and on the facts later tokens read
+ * (open, merged, which event kinds exist, the last two tokens), which keeps the search small; completeness is not
+ * claimed here: the abstraction test asserts that every consistent value was found.
+ */
+export function searchReconcile(maxSteps: number): Map<string, ReconcileHistory> {
+  const found = new Map<string, ReconcileHistory>();
+  let frontier: ReconcileToken[][] = [[]];
+  for (let depth = 0; depth <= maxSteps && frontier.length > 0; depth++) {
+    const next: ReconcileToken[][] = [];
+    const seen = new Set<string>();
+    for (const steps of frontier) {
+      let key = "";
+      for (const postMergePass of [false, true]) {
+        const b = reconcileGamma({ steps, postMergePass }, VARIANTS[0]);
+        if (b.kind !== "built") continue;
+        const r = classify(b.snap, b.host).reconcile.find((x) => x.w.member.number === VARIANTS[0].member);
+        if (r === undefined) continue;
+        const s = canonical(r.s);
+        if (!found.has(s)) found.set(s, { steps, postMergePass });
+        if (!postMergePass) key = s;
+      }
+      if (depth === maxSteps) continue;
+      for (const t of RECONCILE_TOKENS) {
+        if (!reconcileTokenApplies(steps, t)) continue;
+        const ext = [...steps, t];
+        const events = ext.filter((x) => x === "C" || x === "O");
+        const k = canonical({ key, t, open: events.at(-1) !== "C", merged: ext.includes("M"), c: events.includes("C"), o: events.includes("O"), last: steps.slice(-1) });
+        if (seen.has(k)) continue;
+        seen.add(k);
+        next.push(ext);
+      }
+    }
+    frontier = next;
+  }
+  return found;
+}
+
+export function reconcileGamma(h: ReconcileHistory, v: Variant): Built {
   const a = new Assembly(v);
   const ctx = `${v.repo.owner}/${v.repo.name}#${v.member}`;
-  const events: { id: EventId; kind: "closed" | "reopened"; at: Millis }[] = [];
-  let outcomeAt: Millis | null = null;
-  const establish = (): void => {
-    outcomeAt = a.now();
-    if (r.outcome === "delivered") {
-      a.prs.push({
-        ref: { repo: v.repo, number: v.pr },
-        state: { kind: "merged", mergeSha: `m-${v.name}` as Sha, mergedAt: outcomeAt },
-        head: `h-${v.name}` as Sha,
-        target: { repo: v.repo, base: "main" },
-        bodyHash: "pr" as Hash,
-        appliedSubmit: null,
-        mergeable: "yes",
-        checks: { state: "pass", failedRunId: null, latestRunCreatedAt: null },
-        closes: [a.m],
-        agendaMarker: true,
-      });
+  const events: LifecycleEvent[] = [];
+  let body = 0;
+  const bodyHash = (): Hash => `body-${v.name}-${v.member}-${body}` as Hash;
+  let open = true;
+  for (const t of h.steps) {
+    switch (t) {
+      case "C":
+      case "O":
+        events.push({ id: a.eventId(), kind: t === "C" ? "closed" : "reopened", at: a.now() });
+        open = t === "O";
+        break;
+      case "M":
+        a.prs.push({
+          ref: { repo: v.repo, number: v.pr },
+          state: { kind: "merged", mergeSha: `m-${v.name}` as Sha, mergedAt: a.now() },
+          head: `h-${v.name}` as Sha,
+          target: { repo: v.repo, base: "main" },
+          bodyHash: "pr" as Hash,
+          appliedSubmit: null,
+          mergeable: "yes",
+          checks: { state: "pass", failedRunId: null, latestRunCreatedAt: null },
+          closes: [a.m],
+          agendaMarker: true,
+        });
+        break;
+      case "N":
+        a.decision({ subject: "noCode", member: a.m, bodyHash: bodyHash(), reason: "satisfied" });
+        break;
+      case "X": {
+        const claim = a.claim("noCode");
+        a.decision({ subject: "noCodeClaim", claim: claim.id, member: a.m, bodyHash: bodyHash(), verdict: "refuted" });
+        break;
+      }
+      case "Kn":
+      case "Kr": {
+        const e = [...events].reverse().find((x) => x.kind === "closed");
+        if (e === undefined) return infeasible("no close event to pin");
+        a.decision({ subject: "closed", member: a.m, event: e.id, bodyHash: bodyHash(), verdict: t === "Kn" ? "confirmedNoCode" : "reopen" });
+        break;
+      }
+      case "Rs":
+      case "Rc":
+      case "Ra": {
+        const e = [...events].reverse().find((x) => x.kind === "reopened");
+        if (e === undefined) return infeasible("no reopen event to pin");
+        a.decision({ subject: "reopened", member: a.m, event: e.id, verdict: t === "Rs" ? "restore" : t === "Rc" ? "correction" : "reopenAccepted" });
+        break;
+      }
+      case "B":
+        body++;
+        a.now();
+        break;
     }
-    if (r.outcome === "noCode") a.decision({ subject: "noCode", member: a.m, bodyHash: `body-${v.name}-${v.member}` as Hash, reason: "satisfied" });
-  };
-  // each decision follows the event it pins (chronological, as Main answers a decide(...) ticket)
-  const lastR = r.events.lastIndexOf("R");
-  const lastC = r.events.lastIndexOf("C");
-  if (r.reopenDecision !== "none" && lastR < 0) return infeasible("no reopen event to pin");
-  if (r.closedDecision !== "none" && lastC < 0) return infeasible("no close event to pin");
-  for (let i = 0; i <= r.events.length; i++) {
-    if (i === r.outcomeAfter && r.outcome !== "pending") establish();
-    const kind = r.events[i];
-    if (kind === undefined) continue;
-    const e = { id: a.eventId(), kind: kind === "C" ? ("closed" as const) : ("reopened" as const), at: a.now() };
-    events.push(e);
-    if (i === lastR && r.reopenDecision !== "none") a.decision({ subject: "reopened", member: a.m, event: e.id, verdict: r.reopenDecision });
-    if (i === lastC && r.closedDecision !== "none")
-      a.decision({ subject: "closed", member: a.m, event: e.id, bodyHash: `body-${v.name}-${v.member}` as Hash, verdict: r.closedDecision });
   }
-  const open = events.length === 0 || events.at(-1)?.kind === "reopened";
-  a.issues = a.issues.map((i) => (i.ref.number === v.member ? { ...i, open, events } : i));
+  a.issues = a.issues.map((i) => (i.ref.number === v.member ? { ...i, open, events, bodyHash: bodyHash() } : i));
   // keep M's unit current: γ1 adds a pending correction member, γ2 an unapplied body replacement on M
   const members: IssueRef[] = [a.m];
   if (!v.noise) {
@@ -412,8 +493,8 @@ export function reconcileGamma(r: ReconcileRecipe, v: Variant): Built {
     const q = a.claim("question");
     a.decision({ subject: "question", claim: q.id, verdict: { kind: "answered" }, affected: [] }, [], [a.replaceM()]);
   }
-  if (r.postMergePass) {
-    const merges: Observed[] = r.outcome === "delivered" ? [{ repo: v.repo, commit: `m-${v.name}` as Sha }] : [];
+  if (h.postMergePass) {
+    const merges: Observed[] = h.steps.includes("M") ? [{ repo: v.repo, commit: `m-${v.name}` as Sha }] : [];
     const manifest: Manifest = {
       gate: "postMerge",
       merges,
@@ -423,9 +504,9 @@ export function reconcileGamma(r: ReconcileRecipe, v: Variant): Built {
     };
     const vctx = `verify:${ctx}`;
     const obligation = obligationId("postMerge", vctx, manifest, 1);
-    a.add({ kind: "verdict", obligation, verdict: { gate: "postMerge", observed: merges, rows: [{ rowId: "r1", command: "c", output: "o", pass: true }, { rowId: "r2", command: "c", output: "o", pass: true }], unrelated: [] } }, { obligation, manifest, key: `${vctx}|${obligation}` });
+    const rows = members.flatMap((m) => a.issues.find((i) => i.ref.number === m.number)?.acceptanceRows ?? []).map((rowId) => ({ rowId, command: "c", output: "o", pass: true }));
+    a.add({ kind: "verdict", obligation, verdict: { gate: "postMerge", observed: merges, rows, unrelated: [] } }, { obligation, manifest, key: `${vctx}|${obligation}` });
   }
-  void outcomeAt;
   return { kind: "built", snap: a.snapshot(), host: NO_HOST };
 }
 
@@ -499,4 +580,43 @@ export function verificationGamma(r: VerificationRecipe, v: Variant): Built {
   } else if (r.failDecision !== "none") return infeasible("no verdict to decide");
   if (r.claim) a.claim("question", { unit: a.m });
   return { kind: "built", snap: a.snapshot(), host: NO_HOST };
+}
+
+// ------------------------------------------------------------------ closure: direct construction
+
+export function closureGamma(t: ClosureSituation, v: Variant): Built {
+  const broken = violations(CLOSURE_CONSTRAINTS, t);
+  if (broken.length > 0) return infeasible(broken.join("; "));
+  const a = new Assembly(v);
+  const parentRef: IssueRef = { repo: v.repo, number: v.member + 1000 };
+  // M is terminal as a closed noCode member (confirmed, then closed), or still pending
+  if (t.allUnitsTerminal) {
+    a.decision({ subject: "noCode", member: a.m, bodyHash: `body-${v.name}-${v.member}` as Hash, reason: "satisfied" });
+    const at = a.now();
+    a.issues = a.issues.map((i) => (i.ref.number === v.member ? { ...i, open: false, events: [{ id: a.eventId(), kind: "closed", at }] } : i));
+  }
+  if (t.strandedDesign) {
+    // a withPr design commit that is neither on the default branch nor in any open PR
+    const q = a.claim("question");
+    a.decision({ subject: "question", claim: q.id, verdict: { kind: "designGap", route: { kind: "withPr", commit: `d-${v.name}` as Sha, designBranch: "design" } }, affected: [] });
+  }
+  if (t.parent !== "none") {
+    const children = v.noise ? [a.m, { repo: v.repo, number: 1 }] : [a.m];
+    a.issues.push(a.issue(parentRef.number, { open: t.parent === "open", children, acceptanceRows: [`${v.repo.owner}/${v.repo.name}#${parentRef.number}/c1`] }));
+  }
+  const snap0 = (): Snapshot => a.snapshot(t.parent === "none" ? null : parentRef);
+  if (t.closure !== "none") {
+    const c = classify(snap0(), NO_HOST).closure;
+    const current = c.w.manifest;
+    if (current === null || current.gate !== "closure" || c.w.ids.closure === null) return infeasible("γ: no closure manifest");
+    const manifest: Manifest = t.closure === "stale" ? { ...current, parentBodyHash: "old-parent" as Hash } : current;
+    const obligation = t.closure === "stale" ? obligationId("closure", "closure", manifest, 1) : c.w.ids.closure;
+    const pass = t.closure !== "validFailUnadjudicated";
+    const rows = [{ rowId: `${v.repo.owner}/${v.repo.name}#${parentRef.number}/c1`, command: "c", output: "o", pass }];
+    const rec = a.add({ kind: "verdict", obligation, verdict: { gate: "closure", observed: current.merges, rows } }, { obligation, manifest, key: `closure|${obligation}` });
+    if (t.failDecision !== "none") a.decision({ subject: "closureFail", verdictRecord: rec.id, verdict: t.failDecision });
+  }
+  if (t.claim !== "none") a.claim("question", "closure");
+  if (t.reported) a.decision({ subject: "report", summary: "s" });
+  return { kind: "built", snap: snap0(), host: NO_HOST };
 }

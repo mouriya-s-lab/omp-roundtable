@@ -253,11 +253,13 @@ function programEdges(w: World, c: Classified, ob: Obligation): [string, World |
   switch (a.kind) {
     case "effect": {
       out.push([`effect ${a.target.kind}`, applyEffect(w, a.target)]);
-      // execution failure (core.md §3 效应: execution records the failure time)
-      const failed = spend(w, "fail");
+      // execution failure (core.md §3 效应: execution records the failure time). A first failure spends fail budget; a
+      // failure again after a `retry` decision is free, so every retry → fail → decide(effectFailed) cycle is explored
+      const retried = c.effects.some((e) => e.w.id === ob.id && e.s.failure === "retry");
+      const failed = retried ? w : spend(w, "fail");
       if (failed !== null) {
         const t = tick(failed);
-        out.push([`effect ${a.target.kind} fails`, { ...t, host: { ...t.host, failures: [...t.host.failures, { effect: ob.id, at: ms(t.clock), error: "boom" }] } }]);
+        out.push([`effect ${a.target.kind} fails${retried ? " again after retry" : ""}`, { ...t, host: { ...t.host, failures: [...t.host.failures, { effect: ob.id, at: ms(t.clock), error: "boom" }] } }]);
       }
       break;
     }
@@ -289,7 +291,6 @@ function programEdges(w: World, c: Classified, ob: Obligation): [string, World |
     default:
       assertNever(a);
   }
-  void c;
   return out;
 }
 
@@ -486,7 +487,9 @@ function mainEdges(w: World, c: Classified, ob: Obligation): [string, Admitted |
       break;
     }
     case "decideEffectFailed": {
-      const effect = ob.id.replace(/:failed$/, "") as ObligationId;
+      const e = c.effects.find((x) => x.w.failedId === ob.id);
+      if (e === undefined) break;
+      const effect = e.w.id;
       const failedAt = w.host.failures.filter((f) => f.effect === effect).at(-1)?.at;
       if (failedAt !== undefined) for (const verdict of ["retry", "external"] as const) add(verdict, decision(w, ob, { subject: "effectFailed", effect, failedAt, verdict }));
       break;
