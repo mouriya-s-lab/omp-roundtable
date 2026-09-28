@@ -76,7 +76,7 @@
 | 义务 | 取代事件 |
 |---|---|
 | deliver | M 上本议程的 PR 被放弃：未合并就关闭，或者被 `replacePr` 放弃 |
-| review、accept | 同一 pin 上的失败结论被取代：它的发现全部为 `rejected` 或 `outOfScope` |
+| review、accept | 同一 pin 上的失败结论被取代：它的发现全部为 `rejected` 或 `outOfScope`；或者它有被维持的发现，而 owner 在裁定之后已经提交过 `PrSubmit`（只改证据的修复） |
 | postMerge、closure | 同一 pin 上对失败结论裁定 `reverify` |
 
 review 的发现被驳回时，清单本身也会变（它包含「此前被驳回的发现」），两种变化任一发生都换一名新席位。
@@ -116,13 +116,13 @@ review 的发现被驳回时，清单本身也会变（它包含「此前被驳�
 | `claims` | `none`，或 `pending(kind)`，kind 为 `question`、`noCode`、`split`、`blocked` |
 | `ours` | `none`，或 `maintainable(gate)` |
 | `foreign` | `true` 或 `false` |
-| `materialized` | `settled` 或 `pending`：M 的 `openPr` / `updatePr`，以及改变契约的裁定所要求的 `applyBody` / `createIssue`（含 `acceptanceMethod` 转移出去的承接 issue）是否有尚未完成的 |
+| `materialized` | `settled` 或 `pending`：M 的 `openPr` / `updatePr`，以及改变契约的裁定所要求的 `applyBody` / `createIssue`（含 `acceptanceMethod` 转移出去的承接 issue）是否有尚未完成的；PR head 与最新 `PrSubmit` 的 head 不同也算 `pending` |
 | `repair` | owner 与 main 两类待修复项，各自是否存在 |
 | `seats` | owner、review、accept 各自所需的席位为 `live`、`parked` 或 `absent` |
 
 - `maintainable`：open，恰好关闭 M，目标正确，带本议程的来源标记或在召集时指定接管，并且没有被 `replacePr` 裁定放弃。
 - `gate`：
-  - review 与 accept 各取一个值：`none`、`valid(pass)`、`valid(fail, 已裁或未裁)`、`superseded`、`stale`。`superseded`：发现全部为 `rejected` 或 `outOfScope`；
+  - review 与 accept 各取一个值：`none`、`valid(pass)`、`valid(fail, 已裁或未裁)`、`superseded`、`stale`。`superseded` 的条件同上表；
   - 另含 `mergeable` 与 `checks`。
 
 | 规则 | 义务 |
@@ -131,7 +131,7 @@ review 的发现被驳回时，清单本身也会变（它包含「此前被驳�
 | `ours = none` | Owner `deliver` |
 | `ours ≠ none` 且 `foreign` | Program `noticeForeignPr` |
 | 某条有效的失败结论还有未裁的发现 | Main `decide(findings)` |
-| owner 待修复项（含 `implDefect` 与 `checks` 的 `fixNeeded` 裁定），或 `mergeable = no`，或 `checks = fail` 且当前失败的 check run 尚未引出过 `fix` | Owner `fix`，pin 为触发原因（结论、裁定、冲突或失败 run 的 id） |
+| owner 待修复项，或 `mergeable = no`，或 `checks = fail` 且当前失败的 check run 尚未引出过 `fix` | Owner `fix`，pin 为触发原因，按以下优先级取第一个：PR head 与最新 `PrSubmit` 的 head 不同（owner 推送了但还没回复）；被维持的发现所在的结论；`implDefect` 裁定；`checks` 的 `fixNeeded` 裁定；主会话的 designFix commit 未合入；该成员承载的设计 commit 未合入；冲突；失败的 check run |
 | main 待修复项 | Main `designFix` |
 | `checks = fail`，当前失败的 check run 已经引出过一次完结的 `fix` | Main `decide(checks)`，pin 为该 run 的 id |
 | review 不是 `valid` | Gate `review` |
@@ -236,7 +236,7 @@ review 的发现被驳回时，清单本身也会变（它包含「此前被驳�
 - 草稿 id 为 `(Decision id, 序号)`；锚点为 `before`、`after` 或 `correctionOf`。插在当前单元之前的草稿会成为新的当前单元。
 - 设计路线：
   - `defaultFirst(commit)`：commit 必须已在默认分支上。适用条件写在主会话的简报里，推送被拒时改选其他路线。
-  - `withPr(commit)`：commit 在设计分支上，由当前成员合入。
+  - `withPr(commit)`：commit 在设计分支上，承载者是提问的成员（发现所在结论的成员），由它合入。
   - `future(carrier, commit)`：承载者与 commit 同 repo，并位于当前单元之后。没有合适的承载者时，裁定必须附带设计承接项的草稿。
 
 ### 席位名
