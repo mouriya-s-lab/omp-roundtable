@@ -519,7 +519,7 @@ function mainEdges(w: World, c: Classified, ob: Obligation): [string, Admitted |
         // spawn first (native task), receipt afterwards on the resulting pendingAck obligation
         const n = w.host.agents.filter((a) => stripSuffix(a.id) === name).length;
         const id = (n === 0 ? name : `${name}-${n + 1}`) as AgentId;
-        out.push([`spawn: task ${seat?.w.role ?? "?"}`, { kind: "ok", world: { ...tick(w), host: { ...w.host, agents: [...w.host.agents, { id, requestName: name, status: "live" }] } } }]);
+        out.push([`spawn: task ${seat?.w.role ?? "?"}`, { kind: "ok", world: { ...tick(w), host: { ...w.host, agents: [...w.host.agents, { id, requestName: name, status: "live", parkedSince: null }] } } }]);
       }
       break;
     }
@@ -527,8 +527,9 @@ function mainEdges(w: World, c: Classified, ob: Obligation): [string, Admitted |
       const seat = c.seats.find((s) => s.w.wakeId === ob.id);
       if (seat === undefined || seat.w.holder === null) break;
       const holder = seat.w.holder;
-      const a = decision(w, ob, { subject: "woken", agentId: holder, count: seat.w.wokenCount });
-      add("woken", a.kind === "ok" ? { kind: "ok", world: { ...a.world, host: { ...a.world.host, agents: a.world.host.agents.map((x) => (x.id === holder ? { ...x, status: "live" } : x)) } } } : a);
+      if (seat.w.parkedSince === null) break;
+      const a = decision(w, ob, { subject: "woken", agentId: holder, since: seat.w.parkedSince });
+      add("woken", a.kind === "ok" ? { kind: "ok", world: { ...a.world, host: { ...a.world.host, agents: a.world.host.agents.map((x) => (x.id === holder ? { ...x, status: "live", parkedSince: null } : x)) } } } : a);
       break;
     }
     default:
@@ -709,7 +710,10 @@ function environmentEdges(w: World, c: Classified): [string, World | null, boole
   for (const a of w.host.agents) {
     if (a.status !== "live") continue;
     for (const status of ["parked", "aborted"] as const) {
-      perturb(`seat ${status}`, (x) => ({ ...tick(x), host: { ...x.host, agents: x.host.agents.map((y) => (y.id === a.id ? { ...y, status } : y)) } }));
+      perturb(`seat ${status}`, (x) => {
+        const t = tick(x);
+        return { ...t, host: { ...t.host, agents: t.host.agents.map((y) => (y.id === a.id ? { ...y, status, parkedSince: status === "parked" ? ms(t.clock) : null } : y)) } };
+      });
     }
   }
   // fairness: an `external` checks decision is eventually lifted by a new check run

@@ -370,7 +370,12 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
     case "acknowledge":
       return mainBrief(ident, "回执已存在的席位", `请求名 ${input.requestName}，agent ${input.agent}，上一任 ${input.previous ?? "无"}`, "直接回复 Decision(seated{agentId})。");
     case "wake":
-      return mainBrief(ident, "唤醒席位", `agent ${input.agent}（请求名 ${input.seat.requestName}，成员 ${issueUrl(input.seat.issue)}）`, "先回执、再执行：先回复 Decision(woken{agentId})，再用原生 `write agent://<id>` 唤醒。");
+      return mainBrief(
+        ident,
+        "唤醒席位",
+        `agent ${input.agent}（请求名 ${input.seat.requestName}，成员 ${issueUrl(input.seat.issue)}），parked 起点 ${input.seat.parkedSince ?? "?"}`,
+        `先回执、再执行：先回复 Decision(woken{agentId: ${input.agent}, since: ${input.seat.parkedSince ?? "?"}})，然后立即用原生 \`write agent://${input.agent}\` 唤醒。每个 parked 期只有这一张票据：回执之后若不执行 write，席位不会再被唤醒。`,
+      );
     case "stall":
       return mainBrief(
         ident,

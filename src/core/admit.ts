@@ -231,7 +231,7 @@ function bindingMismatch(c: Classified, ob: Obligation, d: Decision): string | n
     case "seated":
       return expect({ requestName: d.requestName, previous: d.previous }, "席位与上一任 agent");
     case "woken":
-      return expect({ agent: d.agentId, count: d.count }, "agent 与唤醒次数");
+      return expect({ agent: d.agentId, since: d.since }, "agent 与 parked 期");
     case "report":
     case "noCode":
       return null;
