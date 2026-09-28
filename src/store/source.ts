@@ -78,6 +78,8 @@ export interface Source {
   prsByHead(repo: RepoRef, head: string): Promise<readonly PrRef[]>;
   pr(ref: PrRef): Promise<PrRaw>;
   defaultHead(repo: RepoRef): Promise<Sha>;
+  /** Current head of branch `branch` in `repo`; null when the branch does not exist. */
+  branchHead(repo: RepoRef, branch: string): Promise<Sha | null>;
   /** `descendant` contains `ancestor`; false when either commit is unknown to `repo`. */
   contains(repo: RepoRef, ancestor: Sha, descendant: Sha): Promise<boolean>;
   /**

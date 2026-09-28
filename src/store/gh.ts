@@ -310,6 +310,10 @@ export class GhSource implements Source {
     const branch = text(object(await this.api(path(repo)), "repository").default_branch, "repository.default_branch");
     return sha(object(object(await this.api(`${path(repo)}/branches/${encoded(branch)}`), "branch").commit, "branch.commit").sha, "branch.commit.sha");
   }
+  async branchHead(repo: RepoRef, branch: string): Promise<Sha | null> {
+    const found = await this.optionalApi(`${path(repo)}/branches/${encoded(branch)}`);
+    return found === null ? null : sha(object(object(found, "branch").commit, "branch.commit").sha, "branch.commit.sha");
+  }
   async contains(repo: RepoRef, ancestor: Sha, descendant: Sha): Promise<boolean> {
     const result = await this.command(["api", `${path(repo)}/compare/${encoded(ancestor)}...${encoded(descendant)}`]);
     if (result.code !== 0) {
