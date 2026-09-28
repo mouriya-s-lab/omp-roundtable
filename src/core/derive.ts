@@ -1,8 +1,8 @@
 // derive = classify → rules → realize (core.md §4). realize only reads witnesses; it never re-decides.
 
 import { briefFor, type BriefInput } from "./briefs.ts";
-import { classify, type Classified, type EffectTarget } from "./classify.ts";
-import { issueKey, workDir, type SeatRole } from "./identity.ts";
+import { classify, rowOwners, type Classified, type EffectTarget } from "./classify.ts";
+import { issueKey, sameIssue, workDir, type SeatRole } from "./identity.ts";
 import {
   closureDone,
   closureRules,
@@ -16,7 +16,7 @@ import {
   verificationRules,
   type Holder,
 } from "./rules.ts";
-import type { AgentId, Host, IssueRef, ObligationId, Policy, PrRef, Sha, Snapshot } from "./types.ts";
+import type { AgentId, Hash, Host, IssueRef, ObligationId, Policy, PrRef, Sha, Snapshot, StoredRecord } from "./types.ts";
 
 export type ReplyKind = "prSubmit" | "claim" | "verdict" | "decision";
 
@@ -61,6 +61,10 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
   const c = classify(snap, host);
   const out: Obligation[] = [];
   const needed = new Set<string>();
+  const ownersOf = (claim: StoredRecord): { issue: IssueRef; bodyHash: Hash | null }[] =>
+    claim.body.kind === "claim" && claim.body.claim.kind === "question"
+      ? rowOwners(snap, claim.body.claim.context).map((issue) => ({ issue, bodyHash: snap.issues.find((i) => sameIssue(i.ref, issue))?.bodyHash ?? null }))
+      : [];
   const base = (
     id: ObligationId,
     kind: string,
@@ -172,7 +176,7 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
     for (const sp of verificationRules(s)) {
       switch (sp.kind) {
         case "decideClaim":
-          if (w.ids.decideClaim !== null && w.claim !== null) out.push(base(w.ids.decideClaim, sp.kind, "main", ctx, { kind: "decideVerificationClaim", claim: w.claim }));
+          if (w.ids.decideClaim !== null && w.claim !== null) out.push(base(w.ids.decideClaim, sp.kind, "main", ctx, { kind: "decideVerificationClaim", claim: w.claim, rowOwners: ownersOf(w.claim) }));
           break;
         case "postMerge":
           needed.add(w.name);
@@ -199,7 +203,7 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
     for (const sp of closureRules(s)) {
       switch (sp.kind) {
         case "decideClaim":
-          if (w.ids.decideClaim !== null && w.claim !== null) out.push(base(w.ids.decideClaim, sp.kind, "main", "closure", { kind: "decideVerificationClaim", claim: w.claim }));
+          if (w.ids.decideClaim !== null && w.claim !== null) out.push(base(w.ids.decideClaim, sp.kind, "main", "closure", { kind: "decideVerificationClaim", claim: w.claim, rowOwners: ownersOf(w.claim) }));
           break;
         case "closure":
           if (w.ids.closure !== null && w.name !== null && w.parent !== null) {

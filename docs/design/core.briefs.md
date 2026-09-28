@@ -60,10 +60,10 @@
 
 | subject | verdict |
 |---|---|
-| `claim(question)` | `answered`、`outOfDomain`、`implDefect`（产生 owner 待修复项）、`designGap(route)`、`acceptanceMethod` |
+| `claim(question)` | `answered`、`outOfDomain`、`implDefect`（产生 owner 待修复项）、`designGap(route)`、`acceptanceMethod`（须附正文替换，对象是问题所涉验收行所在的 issue：成员 context 为该成员，单元验收为该单元的成员之一，树关闭为 parent） |
 | `claim(noCode)`、`claim(split)` | `confirmed`、`refuted` |
 | `claim(blocked)` | `replacePr`、`external`、`refuted` |
-| `findings` | 对每个发现分别裁定：`upheld(owner \| main)`、`rejected`、`outOfScope`（附草稿）、`designGap(route)`、`acceptanceMethod` |
+| `findings` | 对每个发现分别裁定：`upheld(owner \| main)`、`rejected`、`outOfScope`（附草稿）、`designGap(route)`、`acceptanceMethod`（须附对该成员的正文替换） |
 | `closed` | `confirmedNoCode`、`reopen` |
 | `reopened` | `restore`、`correction`（附草稿）、`reopenAccepted` |
 | `checks` | `rerun`、`fixNeeded`、`external` |

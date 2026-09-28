@@ -4,7 +4,7 @@
 import type { Classified, ClosureWitness, EffectWitness, MemberWitness, ReconcileWitness, SeatWitness, SubjectWitness, Unit, VerificationWitness } from "./classify.ts";
 import { canonical, issueKey } from "./identity.ts";
 import type { MemberSituation } from "./situation.ts";
-import type { AgentId, IssueRef, Policy, PrRef, StoredRecord } from "./types.ts";
+import type { AgentId, Hash, IssueRef, Policy, PrRef, StoredRecord } from "./types.ts";
 
 export type BriefInput =
   | { readonly kind: "deliver" | "fix"; readonly member: MemberWitness; readonly situation: MemberSituation }
@@ -12,7 +12,7 @@ export type BriefInput =
   | { readonly kind: "postMerge"; readonly verification: VerificationWitness }
   | { readonly kind: "closure"; readonly closure: ClosureWitness }
   | { readonly kind: "decideClaim"; readonly member: MemberWitness; readonly claim: StoredRecord }
-  | { readonly kind: "decideVerificationClaim"; readonly claim: StoredRecord }
+  | { readonly kind: "decideVerificationClaim"; readonly claim: StoredRecord; readonly rowOwners: readonly { readonly issue: IssueRef; readonly bodyHash: Hash | null }[] }
   | { readonly kind: "decideFindings"; readonly member: MemberWitness; readonly verdict: StoredRecord }
   | { readonly kind: "designFix"; readonly member: MemberWitness; readonly verdict: StoredRecord }
   | { readonly kind: "decideChecks"; readonly member: MemberWitness }
@@ -237,11 +237,14 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       return mainBrief(
         ident,
         "裁定验收席位的契约问题",
-        recordFact("主张", input.claim, ident),
+        [
+          recordFact("主张", input.claim, ident),
+          ...input.rowOwners.map((o) => `- 验收行所在 issue：${issueUrl(o.issue)}，当前正文哈希 ${o.bodyHash ?? "?"}`),
+        ].join("\n"),
         [
           "- answered 或 outOfDomain：主张结束，席位按你的答复继续原票据。",
           `- designGap(route)：改变契约。${ROUTES}`,
-          "- acceptanceMethod：改变契约，须附正文替换，基准为被替换正文的当前哈希。",
+          "- acceptanceMethod：改变契约，须附对上列验收行所在 issue 之一的正文替换，基准为该 issue 的当前正文哈希；验收以新的验收行重新执行。",
         ].join("\n"),
       );
     case "decideFindings":
