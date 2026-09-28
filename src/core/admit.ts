@@ -221,8 +221,8 @@ function bindingMismatch(c: Classified, ob: Obligation, d: Decision): string | n
     case "agendaGap":
       return expect(d.key, "主题");
     case "stall":
-      // an effect-conflict ticket (also answered by `stall`) is pinned to its effect, not to a stall key
-      return ob.id === c.stall.id ? expect(d.key, "停滞状态") : null;
+      // a stall ticket is pinned to its stall key; an effect-conflict ticket (also answered by `stall`) to its conflict key
+      return expect(d.key, ob.id === c.stall.id ? "停滞状态" : "冲突的效应");
     case "effectFailed":
       return expect({ effect: d.effect, failedAt: d.failedAt }, "效应失败");
     case "seated":
