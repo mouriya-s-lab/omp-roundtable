@@ -5,12 +5,39 @@
   "type": "module",
   "license": "MIT",
   "keywords": ["pi-package", "pi-extension", "omp"],
-  "files": ["src/", "docs/", "README.md", "LICENSE"],
+  "files": ["index.ts", "src/", "docs/", "README.md", "LICENSE"],
+  "omp": {
+    "extensions": ["./index.ts"],
+    "settings": {
+      "recomputeIntervalSeconds": {
+        "type": "number",
+        "description": "Full-recompute interval in seconds (design Q7).",
+        "default": 120,
+        "min": 1,
+        "env": "OMP_ROUNDTABLE_RECOMPUTE_SECONDS"
+      },
+      "hourlyGhCallCeiling": {
+        "type": "number",
+        "description": "Hourly ceiling of GitHub API calls made by this plugin, counted per gh invocation (design Q7).",
+        "default": 1500,
+        "min": 1,
+        "env": "OMP_ROUNDTABLE_HOURLY_GH_CALLS"
+      },
+      "dataDir": {
+        "type": "string",
+        "description": "HMAC key, local state table and gh call log directory. Default: <agent dir>/omp-roundtable.",
+        "env": "OMP_ROUNDTABLE_DIR"
+      }
+    }
+  },
   "scripts": {
     "check": "tsc --noEmit",
     "test": "bun test"
   },
   "devDependencies": {
+    "@oh-my-pi/pi-agent-core": "18.4.2",
+    "@oh-my-pi/pi-coding-agent": "18.4.2",
+    "@oh-my-pi/pi-utils": "18.4.2",
     "@types/bun": "^1.3.14",
     "typescript": "^5.9.3"
   },
