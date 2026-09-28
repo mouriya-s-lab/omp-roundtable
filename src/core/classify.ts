@@ -221,6 +221,18 @@ const issueOf = (snap: Snapshot, ref: IssueRef): IssueFact | null => snap.issues
 
 const sameRepo = (a: RepoRef, b: RepoRef): boolean => a.owner === b.owner && a.name === b.name;
 
+const prKey = (p: PrRef): string => `${p.repo.owner}/${p.repo.name}#${p.number}`;
+
+/** PRs given up by a `replacePr` decision (stamped `abandon`). */
+function abandonedPrs(snap: Snapshot): Set<string> {
+  const out = new Set<string>();
+  for (const r of decisionsOf(snap, "blockedClaim")) {
+    const d = r.body.decision;
+    if (d.subject === "blockedClaim" && d.verdict === "replacePr" && d.abandon !== null) out.add(prKey(d.abandon));
+  }
+  return out;
+}
+
 const onDefault = (snap: Snapshot, repo: RepoRef, sha: Sha): boolean => snap.commits.onDefault.some((c) => sameRepo(c.repo, repo) && c.sha === sha);
 
 const contains = (snap: Snapshot, repo: RepoRef, descendant: Sha, ancestor: Sha): boolean =>
@@ -612,14 +624,7 @@ function classifyMember(
   const claim = memberClaims.find((r) => !decidedClaims.has(r.id)) ?? null;
 
   // PRs
-  const abandoned = new Set(
-    decisionsOf(snap, "blockedClaim").flatMap((r) =>
-      r.body.decision.subject === "blockedClaim" && r.body.decision.verdict === "replacePr" && r.body.decision.abandon !== null
-        ? [`${r.body.decision.abandon.repo.owner}/${r.body.decision.abandon.repo.name}#${r.body.decision.abandon.number}`]
-        : [],
-    ),
-  );
-  const prKey = (p: PrRef): string => `${p.repo.owner}/${p.repo.name}#${p.number}`;
+  const abandoned = abandonedPrs(snap);
   const closingOnlyM = snap.prs.filter((p) => p.closes.length === 1 && p.closes.some((c) => sameIssue(c, ref)));
   const maintainable = closingOnlyM.find(
     (p) =>
@@ -1158,7 +1163,8 @@ function classifyEffects(snap: Snapshot, host: Host, units: readonly Unit[]): { 
   for (const r of latestSubmit.values()) {
     if (r.body.kind !== "prSubmit") continue;
     const member = r.body.member;
-    const ours = snap.prs.filter((p) => p.agendaMarker && p.closes.some((c) => sameIssue(c, member)));
+    const abandonedSet = abandonedPrs(snap);
+    const ours = snap.prs.filter((p) => p.agendaMarker && p.closes.some((c) => sameIssue(c, member)) && !abandonedSet.has(prKey(p.ref)));
     if (ours.some((p) => p.state.kind === "merged")) continue;
     const pr = ours.find((p) => p.state.kind === "open") ?? null;
     const kind = pr === null ? "openPr" : "updatePr";
