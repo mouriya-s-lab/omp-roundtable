@@ -107,6 +107,8 @@ export interface CommitFacts {
   /** `descendant` contains `ancestor`. */
   readonly contains: readonly { readonly repo: RepoRef; readonly ancestor: Sha; readonly descendant: Sha }[];
   readonly defaultHead: readonly { readonly repo: RepoRef; readonly sha: Sha }[];
+  /** Current head of every delivery target's base branch (start point of a new delivery branch); absent when the branch does not exist. */
+  readonly baseHead: readonly { readonly repo: RepoRef; readonly base: string; readonly sha: Sha }[];
 }
 
 // ---------------------------------------------------------------- records (replies written as signed comments)

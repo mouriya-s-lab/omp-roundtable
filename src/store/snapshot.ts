@@ -332,9 +332,9 @@ async function assemble(
 }
 
 /**
- * Only what core queries: default heads of every target repo; for each repo, containment of every design commit and
- * merge commit (ancestors) in every PR head, the default head and every verdict-observed commit (descendants).
- * `onDefault` is containment in the default head.
+ * Only what core queries: default heads of every target repo; the base-branch head of every delivery target; for each
+ * repo, containment of every design commit and merge commit (ancestors) in every PR head, the default head and every
+ * verdict-observed commit (descendants). `onDefault` is containment in the default head.
  */
 async function readCommits(
   source: Source,
@@ -364,7 +364,12 @@ async function readCommits(
   const onDefault = heads.flatMap(({ repo, sha }) =>
     design.filter((d) => d === sha || contains.some((c) => repoKey(c.repo) === repoKey(repo) && c.ancestor === d && c.descendant === sha)).map((d) => ({ repo, sha: d })),
   );
-  return { onDefault, contains, defaultHead: heads };
+  const targets = new Map<string, { repo: RepoRef; base: string }>();
+  for (const c of agenda.convened) targets.set(`${repoKey(c.target.repo)}@${c.target.base}`, c.target);
+  for (const r of records) for (const d of draftsOf(r)) targets.set(`${repoKey(d.draft.target.repo)}@${d.draft.target.base}`, d.draft.target);
+  const bases = await mapLimit([...targets.values()], FANOUT, async (t) => ({ repo: t.repo, base: t.base, sha: await source.branchHead(t.repo, t.base) }));
+  const baseHead = bases.flatMap((b) => (b.sha === null ? [] : [{ repo: b.repo, base: b.base, sha: b.sha }]));
+  return { onDefault, contains, defaultHead: heads, baseHead };
 }
 
 function assertNever(x: never): never {

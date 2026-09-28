@@ -87,7 +87,7 @@ export interface MemberWitness {
   readonly acceptManifest: Manifest | null;
   readonly attempts: { readonly deliver: number; readonly review: number; readonly accept: number };
   readonly designCommits: readonly Sha[];
-  /** Default-branch head of the delivery target (start point for a new branch). */
+  /** Head of the delivery target's base branch (start point for a new branch). */
   readonly startSha: Sha | null;
   /** Contract-changing decisions that apply to this member (records the holder must read). */
   readonly contractDecisions: readonly RecordId[];
@@ -843,7 +843,7 @@ function classifyMember(
       acceptManifest,
       attempts: { deliver: deliverAttempt, review: review.attempt, accept: accept.attempt },
       designCommits: requiredDesign,
-      startSha: snap.commits.defaultHead.find((h) => sameRepo(h.repo, entry.target.repo))?.sha ?? null,
+      startSha: snap.commits.baseHead.find((h) => sameRepo(h.repo, entry.target.repo) && h.base === entry.target.base)?.sha ?? null,
       contractDecisions: contract.ids,
       ids: {
         deliver: deliverId,
