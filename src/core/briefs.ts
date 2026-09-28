@@ -362,7 +362,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
             `请求名 ${input.seat.requestName}（${input.seat.role}），成员 ${issueUrl(input.seat.issue)}`,
             [
               "先执行、再回执：用原生 `task` 派出；参数 agent 为 owner→task:high、其他→task:mid；isolated: true；name 取请求名；assignment 取下面的简报原文。",
-              "前提：task.async 已开启，并且该 agent 类型没有声明 blocking: true。",
+              "前提：宿主设置 async.enabled 为真，并且该 agent 类型没有声明 blocking: true。",
               "派出后回复 Decision(seated{agentId})，agentId 取 task 返回的实际 id。",
               input.assignment === null ? "" : `\n---\n${input.assignment}`,
             ].join("\n"),
