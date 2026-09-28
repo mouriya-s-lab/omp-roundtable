@@ -86,6 +86,10 @@ export interface MemberWitness {
   readonly acceptManifest: Manifest | null;
   readonly attempts: { readonly deliver: number; readonly review: number; readonly accept: number };
   readonly designCommits: readonly Sha[];
+  /** Default-branch head of the delivery target (start point for a new branch). */
+  readonly startSha: Sha | null;
+  /** Contract-changing decisions that apply to this member (records the holder must read). */
+  readonly contractDecisions: readonly RecordId[];
   readonly ids: {
     readonly deliver: ObligationId;
     readonly fix: ObligationId | null;
@@ -802,6 +806,8 @@ function classifyMember(
       acceptManifest,
       attempts: { deliver: deliverAttempt, review: review.attempt, accept: accept.attempt },
       designCommits: requiredDesign,
+      startSha: snap.commits.defaultHead.find((h) => sameRepo(h.repo, entry.target.repo))?.sha ?? null,
+      contractDecisions: contract.ids,
       ids: {
         deliver: deliverId,
         fix: fixId,
@@ -1175,7 +1181,13 @@ function classifyEffects(snap: Snapshot, host: Host, units: readonly Unit[]): { 
     if (r.body.kind !== "prSubmit") continue;
     const member = r.body.member;
     const abandonedSet = abandonedPrs(snap);
-    const ours = snap.prs.filter((p) => p.agendaMarker && p.closes.some((c) => sameIssue(c, member)) && !abandonedSet.has(prKey(p.ref)));
+    const adopted = units.flatMap((u) => u.members).find((m) => sameIssue(m.issue, member))?.adoptPr ?? null;
+    const ours = snap.prs.filter(
+      (p) =>
+        (p.agendaMarker || (adopted !== null && prKey(adopted) === prKey(p.ref))) &&
+        p.closes.some((c) => sameIssue(c, member)) &&
+        !abandonedSet.has(prKey(p.ref)),
+    );
     if (ours.some((p) => p.state.kind === "merged")) continue;
     const pr = ours.find((p) => p.state.kind === "open") ?? null;
     const kind = pr === null ? "openPr" : "updatePr";

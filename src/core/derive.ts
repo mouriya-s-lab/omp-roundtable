@@ -61,16 +61,27 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
   const c = classify(snap, host);
   const out: Obligation[] = [];
   const needed = new Set<string>();
-  const base = (id: ObligationId, kind: string, holder: Holder, context: string, input: BriefInput): Obligation => ({
+  const base = (
+    id: ObligationId,
+    kind: string,
+    holder: Holder,
+    context: string,
+    input: BriefInput,
+    opts: { readonly seat?: SeatBinding; readonly pin?: unknown } = {},
+  ): Obligation => ({
     id,
     kind,
     holder,
     context,
-    seat: null,
+    seat: opts.seat ?? null,
     action: null,
     accepts: holder === "program" ? [] : holder === "main" ? ["decision"] : [],
     yieldAllowed: false,
-    brief: briefFor(input, policy),
+    brief: briefFor(
+      input,
+      { id, kind, context, requestName: opts.seat?.requestName ?? null, workDir: opts.seat?.workDir ?? null, pin: opts.pin ?? null, parent: snap.agenda.parent },
+      policy,
+    ),
   });
 
   // member
@@ -86,14 +97,16 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
         case "fix": {
           const id = sp.kind === "deliver" ? w.ids.deliver : w.ids.fix;
           if (id === null) break;
-          const ob = base(id, sp.kind, sp.holder, ctx, { kind: sp.kind, member: w, situation: s });
           const owner = sp.holder === "owner";
+          const seat: SeatBinding | undefined = owner
+            ? { role: "owner", requestName: w.names.owner, workDir: workDir(w.entry.issue, w.names.owner), agent: "task:high" }
+            : undefined;
+          const pin = sp.kind === "deliver" ? { attempt: w.attempts.deliver } : w.fixTrigger;
           if (owner) needed.add(w.names.owner);
           out.push({
-            ...ob,
+            ...base(id, sp.kind, sp.holder, ctx, { kind: sp.kind, member: w, situation: s }, seat === undefined ? { pin } : { seat, pin }),
             accepts: ["prSubmit", "claim"],
             yieldAllowed: s.claim === "noCode" || s.claim === "split" || s.claim === "blocked",
-            seat: owner ? { role: "owner", requestName: w.names.owner, workDir: workDir(w.entry.issue, w.names.owner), agent: "task:high" } : null,
           });
           break;
         }
@@ -118,11 +131,9 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           const name = sp.kind === "review" ? w.names.review : w.names.accept;
           if (id === null || name === null) break;
           needed.add(name);
-          out.push({
-            ...base(id, sp.kind, "gate", ctx, { kind: sp.kind, member: w }),
-            accepts: ["verdict", "claim"],
-            seat: { role: sp.kind, requestName: name, workDir: workDir(w.entry.issue, name), agent: "task:mid" },
-          });
+          const seat: SeatBinding = { role: sp.kind, requestName: name, workDir: workDir(w.entry.issue, name), agent: "task:mid" };
+          const pin = { manifest: sp.kind === "review" ? w.reviewManifest : w.acceptManifest, attempt: sp.kind === "review" ? w.attempts.review : w.attempts.accept };
+          out.push({ ...base(id, sp.kind, "gate", ctx, { kind: sp.kind, member: w }, { seat, pin }), accepts: ["verdict", "claim"] });
           break;
         }
         case "merge":
@@ -168,9 +179,11 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
         case "postMerge":
           needed.add(w.name);
           out.push({
-            ...base(w.ids.postMerge, sp.kind, "gate", ctx, { kind: "postMerge", verification: w }),
+            ...base(w.ids.postMerge, sp.kind, "gate", ctx, { kind: "postMerge", verification: w }, {
+              seat: { role: "postMerge", requestName: w.name, workDir: workDir(w.unit.top.issue, w.name), agent: "task:mid" },
+              pin: { manifest: w.manifest, attempt: w.attempt },
+            }),
             accepts: ["verdict", "claim"],
-            seat: { role: "postMerge", requestName: w.name, workDir: workDir(w.unit.top.issue, w.name), agent: "task:mid" },
           });
           break;
         case "decidePostMergeFail":
@@ -195,9 +208,11 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           if (w.ids.closure !== null && w.name !== null && w.parent !== null) {
             needed.add(w.name);
             out.push({
-              ...base(w.ids.closure, sp.kind, "gate", "closure", { kind: "closure", closure: w }),
+              ...base(w.ids.closure, sp.kind, "gate", "closure", { kind: "closure", closure: w }, {
+                seat: { role: "closure", requestName: w.name, workDir: workDir(w.parent, w.name), agent: "task:mid" },
+                pin: { manifest: w.manifest, attempt: w.attempt },
+              }),
               accepts: ["verdict", "claim"],
-              seat: { role: "closure", requestName: w.name, workDir: workDir(w.parent, w.name), agent: "task:mid" },
             });
           }
           break;
