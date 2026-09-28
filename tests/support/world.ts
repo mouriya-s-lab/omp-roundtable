@@ -310,8 +310,8 @@ function applyEffect(w: World, target: Extract<Obligation["action"], { kind: "ef
         state: { kind: "open" },
         head: body.head,
         target: { repo, base: "main" },
-        bodyHash: fnv64(`pr-body|${target.submit.id}`),
-        appliedSubmit: target.submit.id,
+        bodyHash: fnv64(`pr-body|${target.submit.id}|${target.designCommits.join(",")}`),
+        applied: { submit: target.submit.id, designCommits: target.designCommits },
         mergeable: "unknown",
         checks: { state: "pending", failedRunId: null, latestRunCreatedAt: ms(t.clock) },
         closes: [body.member],
@@ -322,7 +322,11 @@ function applyEffect(w: World, target: Extract<Obligation["action"], { kind: "ef
     case "updatePr": {
       const body = target.submit.body;
       if (body.kind !== "prSubmit" || target.pr === null) throw new Error("updatePr without PR");
-      return updatePr(t, target.pr.number, (p) => ({ ...p, bodyHash: fnv64(`pr-body|${target.submit.id}`), appliedSubmit: target.submit.id }));
+      return updatePr(t, target.pr.number, (p) => ({
+        ...p,
+        bodyHash: fnv64(`pr-body|${target.submit.id}|${target.designCommits.join(",")}`),
+        applied: { submit: target.submit.id, designCommits: target.designCommits },
+      }));
     }
     case "applyBody":
       return updateIssue(t, target.replacement.issue, (i) => ({

@@ -2,8 +2,8 @@
 // it reads the source, returns `alreadyDone` when the effect's completion check (core.md §3 效应) already holds,
 // and otherwise writes. A source fact that contradicts the write's premise is a `precondition` error, never a write.
 
-import { computeUnits, type IssueRef, type ObligationId, type PrRef, type ProgramAction, type RecordId, type StoredRecord } from "../core/index.ts";
-import { encodeMarker, rawEnvelopes, scanMarkers, withMarkers, bodyHash } from "./codec.ts";
+import { computeUnits, type IssueRef, type ObligationId, type PrRef, type ProgramAction, type RecordId, type Sha, type StoredRecord } from "../core/index.ts";
+import { encodeMarker, rawEnvelopes, scanMarkers, withMarkers, bodyHash, type PrPayload } from "./codec.ts";
 import type { StoreError, StoreResult } from "./index.ts";
 import type { HmacKey } from "./key.ts";
 import { message } from "./records.ts";
@@ -61,7 +61,7 @@ async function run(source: Source, key: HmacKey, agenda: IssueRef, obligationId:
       return DONE;
     case "openPr":
     case "updatePr":
-      return materializePr(source, key, agenda, t.kind, t.submit, t.pr);
+      return materializePr(source, key, agenda, t.kind, t.submit, t.pr, t.designCommits);
     case "applyBody": {
       const rep = t.replacement;
       const issue = await source.issue(rep.issue);
@@ -136,7 +136,10 @@ async function noticeForeign(source: Source, key: HmacKey, agenda: IssueRef, obl
   return wrote ? DONE : ALREADY;
 }
 
-/** openPr / updatePr from the member's latest PrSubmit; complete when a PR body carries this submit's `pr` marker. */
+/**
+ * openPr / updatePr from the member's latest PrSubmit. Complete when a PR body's `pr` marker carries this submit and
+ * exactly this set of main-session design commits (core's `carries`); the list comes from the effect target only.
+ */
 async function materializePr(
   source: Source,
   key: HmacKey,
@@ -144,19 +147,25 @@ async function materializePr(
   kind: "openPr" | "updatePr",
   submit: StoredRecord,
   pr: PrRef | null,
+  designCommits: readonly Sha[],
 ): Promise<Outcome> {
   if (submit.body.kind !== "prSubmit") return fail("precondition", `record ${submit.id} is not a PrSubmit`);
   const s = submit.body;
-  const carries = (body: string): boolean =>
-    scanMarkers(key, body).some((m) => m.ok && m.marker.kind === "pr" && sameRef(m.marker.payload.agenda, agenda) && m.marker.payload.appliedSubmit === submit.id);
+  const marker = (body: string): PrPayload | null => {
+    for (const m of scanMarkers(key, body)) if (m.ok && m.marker.kind === "pr" && sameRef(m.marker.payload.agenda, agenda)) return m.marker.payload;
+    return null;
+  };
+  const sameSet = (a: readonly Sha[], b: readonly Sha[]): boolean => a.length === b.length && a.every((x) => b.includes(x));
+  const carries = (p: PrPayload | null): boolean => p !== null && p.appliedSubmit === submit.id && sameSet(p.designCommits, designCommits);
+  const design = designCommits.length === 0 ? "" : `\n\n## 主会话设计 commit\n\n以下 commit 由主会话提交，不属于本 PR 的 owner：\n\n${designCommits.map((c) => `- ${c}`).join("\n")}`;
   const render = (): string =>
-    withMarkers(`${s.body.trimEnd()}\n\nCloses ${refKey(s.member)}`, [
-      encodeMarker(key, { kind: "pr", payload: { agenda, member: s.member, appliedSubmit: submit.id as RecordId } }),
+    withMarkers(`${s.body.trimEnd()}${design}\n\nCloses ${refKey(s.member)}`, [
+      encodeMarker(key, { kind: "pr", payload: { agenda, member: s.member, appliedSubmit: submit.id as RecordId, designCommits } }),
     ]);
 
   if (kind === "updatePr") {
     if (pr === null) return fail("precondition", "updatePr without a PR");
-    if (carries((await source.pr(pr)).body)) return ALREADY;
+    if (carries(marker((await source.pr(pr)).body))) return ALREADY;
     await source.editPr(pr, s.title, render());
     return DONE;
   }
@@ -169,7 +178,10 @@ async function materializePr(
   if (entry === undefined) return fail("precondition", `${refKey(s.member)} is not a member of agenda ${refKey(agenda)}`);
   const target = entry.target;
   for (const ref of await source.prsByHead(target.repo, s.branch)) {
-    if (carries((await source.pr(ref)).body)) return ALREADY;
+    const found = marker((await source.pr(ref)).body);
+    if (carries(found)) return ALREADY;
+    // A PR already carries this submit with another design list: creating a second PR would duplicate it.
+    if (found !== null && found.appliedSubmit === submit.id) return fail("precondition", `${refKey(ref)} already carries ${submit.id} with other design commits`);
   }
   await source.createPr({ repo: target.repo, base: target.base, head: s.branch, title: s.title, body: render() });
   return DONE;

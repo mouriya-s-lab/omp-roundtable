@@ -3,6 +3,7 @@
 
 import {
   type Agenda,
+  type AppliedSubmit,
   type ChecksFact,
   type CommitFacts,
   type Decision,
@@ -291,7 +292,7 @@ async function assemble(
     const comments = await source.comments(raw.ref);
     for (const c of comments) noticesFrom(`comment ${c.id} on ${refKey(raw.ref)}`, scanMarkers(key, c.body));
     const where = `body of PR ${refKey(raw.ref)}`;
-    let appliedSubmit: RecordId | null = null;
+    let applied: AppliedSubmit | null = null;
     const closes = [...raw.closes];
     const close = (issue: IssueRef): void => {
       if (!closes.some((c) => sameRef(c, issue))) closes.push(issue);
@@ -299,7 +300,7 @@ async function assemble(
     for (const s of scanMarkers(key, raw.body)) {
       if (!s.ok) diagnostics.push({ where, reason: `${s.kind} block: ${s.reason}` });
       else if (s.marker.kind === "pr" && sameRef(s.marker.payload.agenda, agendaRef)) {
-        appliedSubmit = s.marker.payload.appliedSubmit;
+        applied = { submit: s.marker.payload.appliedSubmit, designCommits: s.marker.payload.designCommits };
         close(s.marker.payload.member);
       }
     }
@@ -316,11 +317,11 @@ async function assemble(
       head: raw.head,
       target: { repo: raw.baseRepo, base: raw.base },
       bodyHash: bodyHash(raw.body),
-      appliedSubmit,
+      applied,
       mergeable: raw.mergeable,
       checks,
       closes,
-      agendaMarker: appliedSubmit !== null,
+      agendaMarker: applied !== null,
     };
   });
 
