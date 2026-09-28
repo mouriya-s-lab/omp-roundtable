@@ -93,13 +93,18 @@ export interface PrFact {
   readonly head: Sha;
   readonly target: DeliveryTarget;
   readonly bodyHash: Hash;
-  /** PrSubmit record whose applied marker the PR body carries. */
-  readonly appliedSubmit: RecordId | null;
+  /** The program-rendered body's applied marker: which PrSubmit it carries and the main-session design commits it credits. */
+  readonly applied: AppliedSubmit | null;
   readonly mergeable: Mergeable;
   readonly checks: ChecksFact;
   /** Issues in the PR's closing references (kept after merge). */
   readonly closes: readonly IssueRef[];
   readonly agendaMarker: boolean;
+}
+
+export interface AppliedSubmit {
+  readonly submit: RecordId;
+  readonly designCommits: readonly Sha[];
 }
 
 export interface CommitFacts {
