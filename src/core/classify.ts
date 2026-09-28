@@ -164,6 +164,8 @@ export interface EffectWitness {
   /** Obligation pinned (effect id, failure time) for the latest failure (core.md §4 effect failures). */
   readonly failedId: ObligationId | null;
   readonly conflictId: ObligationId;
+  /** Key a `Decision(stall)` on the effect-conflict ticket must name; the ticket is pinned to it. */
+  readonly conflictKey: Hash;
 }
 
 export interface SeatWitness {
@@ -1206,7 +1208,8 @@ function classifyEffects(mint: Mint, snap: Snapshot, host: Host, units: readonly
         target,
         unit,
         failedId: latest === undefined ? null : mint("decideEffectFailed", "agenda", { effect: id, failedAt: latest.at }, 1),
-        conflictId: mint("decideEffectConflict", "agenda", id, 1),
+        conflictKey: fnv64(id),
+        conflictId: mint("decideEffectConflict", "agenda", fnv64(id), 1),
       },
     });
   };

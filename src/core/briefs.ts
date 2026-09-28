@@ -344,7 +344,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         ident,
         "正文替换的基准哈希已不符",
         `- 效应 ${input.effect.id}：${canonical(input.effect.target)}`,
-        "- 重新读取当前正文后，以新的裁定给出替换（基准为当前哈希），或说明放弃。",
+        `- 回复 Decision(stall{key: ${input.effect.conflictKey}})：resolved 时附上以当前正文哈希为基准的新替换，它取代这次冲突的替换；external 表示外部阻塞，须立即报告操作员。`,
       );
     case "report":
       return mainBrief(
@@ -372,7 +372,12 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
     case "wake":
       return mainBrief(ident, "唤醒席位", `agent ${input.agent}（请求名 ${input.seat.requestName}，成员 ${issueUrl(input.seat.issue)}）`, "先回执、再执行：先回复 Decision(woken{agentId})，再用原生 `write agent://<id>` 唤醒。");
     case "stall":
-      return mainBrief(ident, "停滞：推导不出任何义务，也不在等待集合里", canonical(input.classified.stall), "补充事实（草稿、插入），或裁定 external 并立即报告操作员。");
+      return mainBrief(
+        ident,
+        "停滞：推导不出任何义务，也不在等待集合里",
+        canonical(input.classified.stall),
+        `回复 Decision(stall{key: ${input.classified.stall.key}})：resolved 附上补充事实（草稿、插入）；external 表示外部阻塞，须立即报告操作员。`,
+      );
     case "program":
       return `程序效应：${input.what}（${ident.id}）`;
     default:

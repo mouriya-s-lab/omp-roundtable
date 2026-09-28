@@ -494,9 +494,13 @@ function mainEdges(w: World, c: Classified, ob: Obligation): [string, Admitted |
       if (failedAt !== undefined) for (const verdict of ["retry", "external"] as const) add(verdict, decision(w, ob, { subject: "effectFailed", effect, failedAt, verdict }));
       break;
     }
-    case "decideStall":
-      for (const verdict of ["resolved", "external"] as const) add(verdict, decision(w, ob, { subject: "stall", key: c.stall.key, verdict }));
+    case "decideStall": {
+      // a stall ticket is keyed by the stall key; an effect-conflict ticket by its conflict key (its pin)
+      const conflicted = c.effects.find((e) => e.w.conflictId === ob.id);
+      const key = conflicted === undefined ? c.stall.key : conflicted.w.conflictKey;
+      for (const verdict of ["resolved", "external"] as const) add(verdict, decision(w, ob, { subject: "stall", key, verdict }));
       break;
+    }
     case "report":
       add("summary", decision(w, ob, { subject: "report", summary: "s" }));
       break;
