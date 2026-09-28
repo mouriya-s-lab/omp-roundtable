@@ -20,6 +20,7 @@ import {
   type RecordBody,
   type RecordId,
   type RepoRef,
+  type Sha,
 } from "../core/index.ts";
 import type { HmacKey } from "./key.ts";
 
@@ -46,6 +47,8 @@ export interface PrPayload {
   /** The member the submit delivers: a closing reference GitHub does not parse for a non-default base. */
   readonly member: IssueRef;
   readonly appliedSubmit: RecordId;
+  /** Main-session design commits the rendered body credits (the effect target's list). */
+  readonly designCommits: readonly Sha[];
 }
 export interface AppliedPayload {
   readonly decisions: readonly RecordId[];
@@ -164,7 +167,10 @@ function parseMarker(kind: string, v: unknown): Marker | null {
     case "pr": {
       const agenda = issueOf(v.agenda);
       const member = issueOf(v.member);
-      return agenda !== null && member !== null && isStr(v.appliedSubmit) ? { kind, payload: { agenda, member, appliedSubmit: v.appliedSubmit as RecordId } } : null;
+      const design = Array.isArray(v.designCommits) && v.designCommits.every(isStr) ? (v.designCommits as Sha[]) : null;
+      return agenda !== null && member !== null && isStr(v.appliedSubmit) && design !== null
+        ? { kind, payload: { agenda, member, appliedSubmit: v.appliedSubmit as RecordId, designCommits: design } }
+        : null;
     }
     case "applied":
       return Array.isArray(v.decisions) && v.decisions.every(isStr) ? { kind, payload: { decisions: v.decisions as RecordId[] } } : null;
