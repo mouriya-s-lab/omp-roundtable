@@ -334,7 +334,8 @@ function contractDecisions(snap: Snapshot, member: IssueRef): { ids: RecordId[];
         if (d.verdict.kind === "designGap") commits.push(d.verdict.route.commit);
       }
     }
-    if (d.subject === "findings" && affectsMember) {
+    const verdictOwner = d.subject === "findings" ? parseIssueKey(snap.records.find((x) => x.id === d.verdictRecord)?.idempotencyKey ?? "") : null;
+    if (d.subject === "findings" && (affectsMember || (verdictOwner !== null && sameIssue(verdictOwner, member)))) {
       for (const f of d.perFinding) {
         if (f.verdict.kind === "designGap" || f.verdict.kind === "acceptanceMethod") {
           ids.push(r.id);
@@ -1078,11 +1079,21 @@ function designRoutes(snap: Snapshot): DesignRoute[] {
   return out;
 }
 
-/** Design commits a member's PR must contain (withPr / future routes it carries, not yet on the default branch). */
+/**
+ * Design commits a member's PR must contain and that are not yet on the default branch:
+ * withPr / future routes it carries, and designFix commits for findings on its own verdicts.
+ */
 function requiredDesignCommits(snap: Snapshot, member: IssueRef): Sha[] {
-  return designRoutes(snap)
-    .filter((d) => d.carrier !== null && sameIssue(d.carrier, member) && !onDefault(snap, member.repo, d.route.commit))
+  const routed = designRoutes(snap)
+    .filter((d) => d.carrier !== null && sameIssue(d.carrier, member))
     .map((d) => d.route.commit);
+  const fixes = decisionsOf(snap, "designFix").flatMap((r) => {
+    const d = r.body.decision;
+    if (d.subject !== "designFix") return [];
+    const owner = parseIssueKey(snap.records.find((x) => x.id === d.verdictRecord)?.idempotencyKey ?? "");
+    return owner !== null && sameIssue(owner, member) ? [d.commit] : [];
+  });
+  return [...new Set([...routed, ...fixes])].filter((c) => !onDefault(snap, member.repo, c));
 }
 
 function strandedDesignCommits(snap: Snapshot, units: readonly Unit[]): Sha[] {
