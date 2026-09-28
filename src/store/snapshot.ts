@@ -133,7 +133,7 @@ function issuesNamedBy(body: RecordBody): IssueRef[] {
 }
 
 /** Design commits referenced by records: design-gap route commits and designFix commits. */
-function designCommits(records: readonly StoredRecord[]): Sha[] {
+export function designCommits(records: readonly StoredRecord[]): Sha[] {
   const out: Sha[] = [];
   for (const r of records) {
     if (r.body.kind !== "decision") continue;
