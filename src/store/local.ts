@@ -298,6 +298,10 @@ export class LocalSource implements Source {
     if (!sha) throw new Error(`Unknown default branch ${row.defaultBranch} in ${repo.owner}/${repo.name}`);
     return sha as Sha;
   }
+  async branchHead(repo: RepoRef, branch: string): Promise<Sha | null> {
+    const sha = getRepo(load(this.dir), repo).branches[branch];
+    return sha === undefined ? null : sha as Sha;
+  }
   async contains(repo: RepoRef, ancestor: Sha, descendant: Sha): Promise<boolean> {
     const commits = getRepo(load(this.dir), repo).commits;
     if (!Object.hasOwn(commits, ancestor) || !Object.hasOwn(commits, descendant)) return false;
