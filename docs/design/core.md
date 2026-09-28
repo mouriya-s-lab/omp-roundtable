@@ -275,8 +275,10 @@ review 的发现被驳回时，清单本身也会变（它包含「此前被驳�
    - 满足与完结：一个义务的效果写入之后，它不再出现。
    - 确定性：同一输入给出同一输出。
    - 每条规则至少触发一次。
-2. **抽象层**：
-   - 每个 `Situation` 至少构造两份不同的具体 Snapshot（γ₁、γ₂），两者都必须归类到这个 `Situation`，并且 `realize` 接回的对象正确。
+2. **抽象层**：只对「一致」的 `Situation` 构造具体读数。某个值不一致，指它违反了具体读数之间必然成立的约束，例如没有 PR 就不可能有 gate 结论；每条这样的约束都写进测试的约束表，并附理由。
+   - ReconcileSituation、VerificationSituation、ClosureSituation：每一个一致的值都构造两份不同的具体 Snapshot（γ₁、γ₂）。
+   - MemberSituation 的一致值有几十万个，无法逐个构造。对它取系统覆盖：基线加上每个维度的每个取值，再加上 claim × ours × review × accept × materialized 的全积；另外用固定种子随机抽取至少 5,000 个一致值。
+   - 每个取到的值都要求 γ₁、γ₂ 都归类到这个值，并且 `realize` 接回的对象正确。任何一致值构造失败，都算 core 的缺陷。
    - 用随机生成的 Snapshot 检查 `classify` 是全函数。
 3. **模型检查**：
    - 边定义为 α(applyConcrete(γ(s), e))，并检查稳定性：取 γ₁ 与 γ₂ 得到的后继状态相同。
