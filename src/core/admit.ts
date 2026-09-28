@@ -194,13 +194,19 @@ function preconditions(snap: Snapshot, c: Classified, ob: Obligation, reply: Rep
       if (v.gate === "postMerge") {
         const w = c.verification?.w;
         if (w === undefined || w.manifest.gate !== "postMerge") return "当前不在单元验证阶段。";
-        for (const m of w.manifest.merges) {
-          const obs = v.observed.find((o) => o.repo.owner === m.repo.owner && o.repo.name === m.repo.name);
-          if (obs === undefined) return `缺少 ${m.repo.name} 的观察提交。`;
-          const ok = w.legacy
-            ? obs.commit === m.commit || snap.commits.contains.some((x) => x.ancestor === m.commit && x.descendant === obs.commit)
-            : obs.commit === m.commit;
-          if (!ok) return `${m.repo.name} 的观察提交不满足有效条件（${w.legacy ? "须包含" : "须恰好是"} ${m.commit}）。`;
+        // Per target repo: one observed commit. Non-legacy: exactly the unit's latest merge in that repo (R5),
+        // which must contain the repo's earlier merges. Legacy: any commit containing all of the repo's merges.
+        const repos = [...new Map(w.manifest.merges.map((m) => [`${m.repo.owner}/${m.repo.name}`, m.repo])).values()];
+        for (const repo of repos) {
+          const merges = w.manifest.merges.filter((m) => m.repo.owner === repo.owner && m.repo.name === repo.name);
+          const obs = v.observed.find((o) => o.repo.owner === repo.owner && o.repo.name === repo.name);
+          if (obs === undefined) return `缺少 ${repo.name} 的观察提交。`;
+          const containsCommit = (commit: Sha): boolean =>
+            obs.commit === commit || snap.commits.contains.some((x) => x.ancestor === commit && x.descendant === obs.commit);
+          const latest = merges.at(-1);
+          if (!w.legacy && latest !== undefined && obs.commit !== latest.commit) return `${repo.name} 的观察提交须恰好是最新的合并提交 ${latest.commit}。`;
+          const missing = merges.find((m) => !containsCommit(m.commit));
+          if (missing !== undefined) return `${repo.name} 的观察提交须包含合并提交 ${missing.commit}。`;
         }
         const rows = w.unit.members.flatMap((m) => snap.issues.find((i) => sameIssue(i.ref, m.issue))?.acceptanceRows ?? []);
         return sameSet(rows, v.rows.map((r) => r.rowId)) ? null : "验收行 id 集合与覆盖成员的验收行不一致。";
