@@ -126,6 +126,9 @@ export function admit(snap: Snapshot, host: Host, policy: Policy, caller: Caller
     const unbound = bindingMismatch(c, ob, reply.decision);
     if (unbound !== null) return reject(unbound);
   }
+  if (reply.kind === "verdict" && reply.verdict.gate !== ob.kind) return reject(`这张票据是 ${ob.kind}，不接受 ${reply.verdict.gate} 结论。`);
+  if (reply.kind === "claim" && claimContextKey(reply.claim) !== ob.context)
+    return reject(`主张所指的上下文 ${claimContextKey(reply.claim)} 不是这张票据的上下文 ${ob.context}。`);
 
   // step 5: live preconditions
   const pre = preconditions(snap, c, ob, reply, facts);
@@ -357,6 +360,29 @@ function rowsMatch(snap: Snapshot, issueRef: IssueRef | null, rows: readonly str
 function questionContext(snap: Snapshot, claimId: RecordId): Context | null {
   const r = snap.records.find((x) => x.id === claimId);
   return r !== undefined && r.body.kind === "claim" && r.body.claim.kind === "question" ? r.body.claim.context : null;
+}
+
+/** Obligation context a claim speaks for, in derive's context keys (member, `verify:<unit>`, `closure`). */
+function claimContextKey(claim: Claim): string {
+  switch (claim.kind) {
+    case "question":
+      switch (claim.context.kind) {
+        case "member":
+          return issueKey(claim.context.member);
+        case "unitVerification":
+          return `verify:${issueKey(claim.context.unit)}`;
+        case "agendaClosure":
+          return "closure";
+        default:
+          return assertNever(claim.context);
+      }
+    case "noCode":
+    case "split":
+    case "blocked":
+      return issueKey(claim.member);
+    default:
+      return assertNever(claim);
+  }
 }
 
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
