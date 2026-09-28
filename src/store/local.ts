@@ -41,7 +41,6 @@ interface RepoRow {
   defaultBranch: string;
   branches: Record<string, string>;
   commits: Record<string, string[]>;
-  workflowsPresent: boolean;
   requiredChecks: string[];
   nextNumber: number;
   issues: IssueRow[];
@@ -153,7 +152,6 @@ const parseTable = (text: string): Table => {
         defaultBranch: string(row.defaultBranch, `${label}.defaultBranch`),
         branches: record(row.branches, `${label}.branches`, string),
         commits: record(row.commits, `${label}.commits`, (entry, place) => array(entry, place, string)),
-        workflowsPresent: boolean(row.workflowsPresent, `${label}.workflowsPresent`),
         requiredChecks: array(row.requiredChecks, `${label}.requiredChecks`, string),
         nextNumber: number(row.nextNumber, `${label}.nextNumber`),
         issues: array(row.issues, `${label}.issues`, (entry, place): IssueRow => {
@@ -314,9 +312,8 @@ export class LocalSource implements Source {
     }
     return false;
   }
-  async ciConfigured(repo: RepoRef, base: string): Promise<boolean> {
-    const row = getRepo(load(this.dir), repo);
-    return row.workflowsPresent || row.requiredChecks.includes(base);
+  async requiresChecks(repo: RepoRef, base: string): Promise<boolean> {
+    return getRepo(load(this.dir), repo).requiredChecks.includes(base);
   }
 
   async createIssue(repo: RepoRef, title: string, body: string): Promise<IssueRaw> {
@@ -422,12 +419,12 @@ export class LocalSource implements Source {
     });
   }
 
-  seedRepo(repo: RepoRef, input: { defaultBranch: string; commits: readonly { sha: Sha; parents: readonly Sha[] }[]; branches: Record<string, Sha>; workflowsPresent: boolean; requiredChecks: readonly string[] }): void {
+  seedRepo(repo: RepoRef, input: { defaultBranch: string; commits: readonly { sha: Sha; parents: readonly Sha[] }[]; branches: Record<string, Sha>; requiredChecks: readonly string[] }): void {
     this.change(table => {
       const existing = table.repos[key(repo)];
       const commits = Object.fromEntries(input.commits.map(commit => [commit.sha, [...commit.parents]]));
       table.repos[key(repo)] = { owner: repo.owner, name: repo.name, defaultBranch: input.defaultBranch,
-        commits, branches: { ...input.branches }, workflowsPresent: input.workflowsPresent, requiredChecks: [...input.requiredChecks],
+        commits, branches: { ...input.branches }, requiredChecks: [...input.requiredChecks],
         nextNumber: existing?.nextNumber ?? 1, issues: existing?.issues ?? [], prs: existing?.prs ?? [] };
     });
   }

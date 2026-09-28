@@ -25,7 +25,7 @@ export type PrStateRaw =
 
 /**
  * Checks as the source reports them for the PR head. `none`: the head has no status-check rollup at all
- * (snapshot.ts decides pass/pending from `ciConfigured`).
+ * (snapshot.ts decides pass/pending from `requiresChecks`).
  */
 export type ChecksRaw = { readonly kind: "rollup"; readonly fact: ChecksFact } | { readonly kind: "none" };
 
@@ -81,10 +81,10 @@ export interface Source {
   /** `descendant` contains `ancestor`; false when either commit is unknown to `repo`. */
   contains(repo: RepoRef, ancestor: Sha, descendant: Sha): Promise<boolean>;
   /**
-   * CI can report on PRs into `base`: `repo` has at least one Actions workflow, or `base` requires status checks
-   * (branch protection or rulesets). Decides what a PR head without any rollup means.
+   * `base` requires status checks before merging (branch protection or rulesets). Decides what a PR head without
+   * any rollup means, the way GitHub's merge button does.
    */
-  ciConfigured(repo: RepoRef, base: string): Promise<boolean>;
+  requiresChecks(repo: RepoRef, base: string): Promise<boolean>;
 
   // ------------------------------------------------------------ writes
   createIssue(repo: RepoRef, title: string, body: string): Promise<IssueRaw>;

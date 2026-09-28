@@ -323,9 +323,7 @@ export class GhSource implements Source {
     if (!["ahead", "identical", "behind", "diverged"].includes(status)) throw new Error(`Invalid comparison.status: ${status}`);
     return status === "ahead" || status === "identical";
   }
-  async ciConfigured(repo: RepoRef, base: string): Promise<boolean> {
-    const workflows = object(await this.api(`${path(repo)}/actions/workflows?per_page=1`), "workflows");
-    if (integer(workflows.total_count, "workflows.total_count") > 0) return true;
+  async requiresChecks(repo: RepoRef, base: string): Promise<boolean> {
     const branch = encoded(base);
     const protection = await this.optionalApi(`${path(repo)}/branches/${branch}/protection/required_status_checks`);
     if (protection !== null) {

@@ -279,11 +279,11 @@ async function assemble(
     adopted.set(refKey(c.adoptPr), c.issue);
   }
 
-  const ci = new Map<string, Promise<boolean>>();
-  const ciConfigured = (repo: RepoRef, base: string): Promise<boolean> => {
+  const required = new Map<string, Promise<boolean>>();
+  const requiresChecks = (repo: RepoRef, base: string): Promise<boolean> => {
     const k = `${repoKey(repo)}@${base}`;
-    const hit = ci.get(k) ?? source.ciConfigured(repo, base);
-    ci.set(k, hit);
+    const hit = required.get(k) ?? source.requiresChecks(repo, base);
+    required.set(k, hit);
     return hit;
   };
   const prRaws: PrRaw[] = await mapLimit([...prRefs.values()], FANOUT, (p) => source.pr(p));
@@ -305,11 +305,11 @@ async function assemble(
     }
     const adoptedBy = adopted.get(refKey(raw.ref));
     if (adoptedBy !== undefined) close(adoptedBy);
-    // A head without any rollup: CI that has not registered yet is pending; a base no CI reports on passes.
+    // A head without any rollup, as GitHub's merge rule reads it: pending when the base requires checks, else pass.
     const checks: ChecksFact =
       raw.checks.kind === "rollup"
         ? raw.checks.fact
-        : { state: (await ciConfigured(raw.baseRepo, raw.base)) ? "pending" : "pass", failedRunId: null, latestRunCreatedAt: null };
+        : { state: (await requiresChecks(raw.baseRepo, raw.base)) ? "pending" : "pass", failedRunId: null, latestRunCreatedAt: null };
     return {
       ref: raw.ref,
       state: raw.state,
