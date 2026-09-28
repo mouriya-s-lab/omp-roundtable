@@ -22,7 +22,7 @@ export type BriefInput =
   | { readonly kind: "decideSubject"; readonly subject: SubjectWitness }
   | { readonly kind: "decideEffectFailed" | "decideEffectConflict"; readonly effect: EffectWitness }
   | { readonly kind: "report"; readonly units: readonly Unit[] }
-  | { readonly kind: "spawn"; readonly seat: SeatWitness; readonly acknowledgeOnly: boolean; readonly pending: AgentId | null; readonly assignment: string | null }
+  | { readonly kind: "spawn"; readonly seat: SeatWitness; readonly acknowledgeOnly: boolean; readonly pending: AgentId | null }
   | { readonly kind: "acknowledge"; readonly requestName: string; readonly agent: AgentId; readonly previous: AgentId | null }
   | { readonly kind: "wake"; readonly seat: SeatWitness; readonly agent: AgentId }
   | { readonly kind: "stall"; readonly classified: Classified }
@@ -111,6 +111,14 @@ function memberFacts(m: MemberWitness): string {
   return [
     `- 成员：${issueUrl(m.entry.issue)}，当前正文哈希 ${m.issue?.bodyHash ?? "?"}`,
     m.pr === null ? "- PR：尚无" : `- PR：${prUrl(m.pr.ref)}，head ${m.pr.head}，checks ${m.pr.checks.state}`,
+  ].join("\n");
+}
+
+/** The native `task` assignment for a seat: identity only; the ticket brief itself is injected on every request (core.briefs.md Main `spawn`). */
+function seatAssignment(seat: SeatWitness): string {
+  return [
+    `你是圆桌席位 ${seat.requestName}（${seat.role}），负责成员 ${issueUrl(seat.issue)}。`,
+    "你的票据简报会随每次模型请求自动附上；按票据工作，只通过圆桌端口工具回复，回复之前不要结束。",
   ].join("\n");
 }
 
@@ -361,10 +369,14 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
             "派出席位",
             `请求名 ${input.seat.requestName}（${input.seat.role}），成员 ${issueUrl(input.seat.issue)}`,
             [
-              "先执行、再回执：用原生 `task` 派出；参数 agent 为 owner→task:high、其他→task:mid；isolated: true；name 取请求名；assignment 取下面的简报原文。",
+              "先执行、再回执：用原生 `task` 派出；参数 agent 为 owner→task:high、其他→task:mid；isolated: true；name 取请求名；assignment 取下面这段原文，不附加其他内容（票据简报会由圆桌随每次请求注入，不要复制）：",
+              "",
+              "```",
+              seatAssignment(input.seat),
+              "```",
+              "",
               "前提：宿主设置 async.enabled 为真，并且该 agent 类型没有声明 blocking: true。",
               "派出后回复 Decision(seated{agentId})，agentId 取 task 返回的实际 id。",
-              input.assignment === null ? "" : `\n---\n${input.assignment}`,
             ].join("\n"),
           );
     case "acknowledge":
