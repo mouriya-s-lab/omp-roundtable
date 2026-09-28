@@ -67,7 +67,7 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
     holder: Holder,
     context: string,
     input: BriefInput,
-    opts: { readonly seat?: SeatBinding; readonly pin?: unknown } = {},
+    opts: { readonly seat?: SeatBinding } = {},
   ): Obligation => ({
     id,
     kind,
@@ -79,7 +79,7 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
     yieldAllowed: false,
     brief: briefFor(
       input,
-      { id, kind, context, requestName: opts.seat?.requestName ?? null, workDir: opts.seat?.workDir ?? null, pin: opts.pin ?? null, parent: snap.agenda.parent },
+      { id, kind, context, requestName: opts.seat?.requestName ?? null, workDir: opts.seat?.workDir ?? null, pin: c.pins.get(id) ?? null, parent: snap.agenda.parent },
       policy,
     ),
   });
@@ -101,10 +101,9 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           const seat: SeatBinding | undefined = owner
             ? { role: "owner", requestName: w.names.owner, workDir: workDir(w.entry.issue, w.names.owner), agent: "task:high" }
             : undefined;
-          const pin = sp.kind === "deliver" ? { attempt: w.attempts.deliver } : w.fixTrigger;
           if (owner) needed.add(w.names.owner);
           out.push({
-            ...base(id, sp.kind, sp.holder, ctx, { kind: sp.kind, member: w, situation: s }, seat === undefined ? { pin } : { seat, pin }),
+            ...base(id, sp.kind, sp.holder, ctx, { kind: sp.kind, member: w, situation: s }, seat === undefined ? {} : { seat }),
             accepts: ["prSubmit", "claim"],
             yieldAllowed: s.claim === "noCode" || s.claim === "split" || s.claim === "blocked",
           });
@@ -132,8 +131,7 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           if (id === null || name === null) break;
           needed.add(name);
           const seat: SeatBinding = { role: sp.kind, requestName: name, workDir: workDir(w.entry.issue, name), agent: "task:mid" };
-          const pin = { manifest: sp.kind === "review" ? w.reviewManifest : w.acceptManifest, attempt: sp.kind === "review" ? w.attempts.review : w.attempts.accept };
-          out.push({ ...base(id, sp.kind, "gate", ctx, { kind: sp.kind, member: w }, { seat, pin }), accepts: ["verdict", "claim"] });
+          out.push({ ...base(id, sp.kind, "gate", ctx, { kind: sp.kind, member: w }, { seat }), accepts: ["verdict", "claim"] });
           break;
         }
         case "merge":
@@ -181,7 +179,6 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           out.push({
             ...base(w.ids.postMerge, sp.kind, "gate", ctx, { kind: "postMerge", verification: w }, {
               seat: { role: "postMerge", requestName: w.name, workDir: workDir(w.unit.top.issue, w.name), agent: "task:mid" },
-              pin: { manifest: w.manifest, attempt: w.attempt },
             }),
             accepts: ["verdict", "claim"],
           });
@@ -210,7 +207,6 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
             out.push({
               ...base(w.ids.closure, sp.kind, "gate", "closure", { kind: "closure", closure: w }, {
                 seat: { role: "closure", requestName: w.name, workDir: workDir(w.parent, w.name), agent: "task:mid" },
-                pin: { manifest: w.manifest, attempt: w.attempt },
               }),
               accepts: ["verdict", "claim"],
             });
@@ -252,10 +248,10 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           out.push({ ...base(w.id, `effect:${w.target.kind}`, "program", "agenda", { kind: "program", what: w.target.kind }), action: { kind: "effect", target: w.target } });
           break;
         case "decideEffectFailed":
-          out.push(base(`${w.id}:failed` as ObligationId, sp.kind, "main", "agenda", { kind: "decideEffectFailed", effect: w }));
+          if (w.failedId !== null) out.push(base(w.failedId, sp.kind, "main", "agenda", { kind: "decideEffectFailed", effect: w }));
           break;
         case "decideStall":
-          out.push(base(`${w.id}:conflict` as ObligationId, sp.kind, "main", "agenda", { kind: "decideEffectConflict", effect: w }));
+          out.push(base(w.conflictId, sp.kind, "main", "agenda", { kind: "decideEffectConflict", effect: w }));
           break;
         default:
           assertNever(sp.kind);
