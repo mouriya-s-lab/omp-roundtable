@@ -1,0 +1,11 @@
+# Sandbox CI for store integration evidence (issue #3). Runs only on PRs into rt-sandbox/base.
+name: rt-sandbox
+on:
+  pull_request:
+    branches: [rt-sandbox/base]
+jobs:
+  sandbox-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: test ! -e sandbox/FAIL
