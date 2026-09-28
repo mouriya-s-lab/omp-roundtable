@@ -11,7 +11,7 @@
 | 性质 | 证据 |
 |---|---|
 | 子 agent（普通、隔离、孙级）都在同一个 OS 进程里运行；隔离只改变工作树，不另开进程 | `CA/task/executor.ts:3472-3475,3919-4026`；`CA/task/isolation-runner.ts:432-452` |
-| 插件的工厂函数在每个会话绑定时各执行一次；每次加载都以新的 `?mtime=<tag>` 导入入口模块，所以每个会话（主会话与每个子 agent）各有一份模块实例，模块顶层状态不跨会话共享。需要进程内共享的状态放在 `globalThis` 的 `Symbol.for` 槽位里；经包路径导入的宿主单例（如 `AgentRegistry`）仍然共享 | `CA/extensibility/extensions/loader.ts:438-453`；`CA/extensibility/plugins/legacy-pi-compat.ts:2622-2630`（`import(\`${entrySpecifier}?mtime=${nextLegacyPiLoadTag()}\`)`）。探针（#4 端到端运行）：主会话已召集议程，owner 席位的模块实例却报告「本进程当前没有进行中的议程」 |
+| 插件的工厂函数在每个会话绑定时各执行一次。根会话只导入一次插件模块，并把已准备好的工厂转交给非隔离子 agent，子 agent 只重新绑定、不重新求值模块，所以与父会话共享模块实例。隔离子 agent 清空这些预加载后重新导入，每次导入带新的 `?mtime=<tag>`，于是各得一份模块实例。席位按 spawn 票据都以 `isolated: true` 派出，因此模块顶层状态在席位之间不共享；进程内共享的状态放在 `globalThis` 的 `Symbol.for` 槽位里。经包路径导入的宿主单例（如 `AgentRegistry`）仍然共享 | `CA/extensibility/extensions/loader.ts:555-563`；`CA/sdk.ts:2522-2553`；`CA/task/isolation-runner.ts:436-441`（`preloadedExtensionPaths`、`preloadedPreparedExtensions` 置为 `undefined`）；`CA/extensibility/plugins/legacy-pi-compat.ts:2622-2630`（`import(\`${entrySpecifier}?mtime=${nextLegacyPiLoadTag()}\`)`）。探针（#4 端到端运行）：主会话已召集议程，隔离派出的 owner 席位的模块实例却报告「本进程当前没有进行中的议程」 |
 | 只有通过包路径导入（例如 `@oh-my-pi/pi-coding-agent/registry/agent-registry`）才能拿到 CLI 运行时的单例；用绝对路径导入源码会得到另一份单例 | 探针：包路径导入时输出 `registry= Main`，绝对路径导入时输出 `registry= missing`；`PKG:56-64` |
 | `ctx.agent` 提供 `kind`、`id`、`name`、`depth`、`parentId?`，工具的 `execute` 和 `pi.on` 的处理函数都能拿到 | `CA/extensibility/extensions/types.ts:431-452`；`CA/sdk.ts:3227-3244` |
 | 插件注册的工具默认对子 agent 可见，除非会话设置了 `restrictToolNames`，或工具声明了 `hidden` / `defaultInactive` | `CA/sdk.ts:2542-2569` |
