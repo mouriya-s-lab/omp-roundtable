@@ -18,6 +18,7 @@ import type {
   Anchor,
   BodyReplacement,
   Claim,
+  Context,
   Decision,
   DecisionRecordBody,
   DeliveryTarget,
@@ -308,6 +309,20 @@ export function computeUnits(snap: Snapshot): Unit[] {
     }
   }
   return units;
+}
+
+/** Issues whose acceptance rows a question in `context` is about: the targets an `acceptanceMethod` body replacement may rewrite. */
+export function rowOwners(snap: Snapshot, context: Context): IssueRef[] {
+  switch (context.kind) {
+    case "member":
+      return [context.member];
+    case "unitVerification":
+      return computeUnits(snap).find((u) => sameIssue(u.top.issue, context.unit))?.members.map((m) => m.issue) ?? [];
+    case "agendaClosure":
+      return snap.agenda.parent === null ? [] : [snap.agenda.parent];
+    default:
+      return assertNever(context);
+  }
 }
 
 // ---------------------------------------------------------------- outcomes and contracts

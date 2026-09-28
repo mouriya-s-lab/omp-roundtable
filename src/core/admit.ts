@@ -1,12 +1,13 @@
 // admit: decide whether a seat's reply becomes a fact (core.md §4 admit, steps 1–6).
 
-import { outcomeOf, type Classified } from "./classify.ts";
+import { outcomeOf, rowOwners, type Classified } from "./classify.ts";
 import { derive, type Obligation } from "./derive.ts";
 import { canonical, fnv64, issueKey, sameIssue, stripSuffix } from "./identity.ts";
 import type {
   AgentId,
   BodyReplacement,
   Claim,
+  Context,
   Decision,
   Draft,
   Hash,
@@ -16,6 +17,7 @@ import type {
   ObligationId,
   Policy,
   RecordBody,
+  RecordId,
   Route,
   Sha,
   Snapshot,
@@ -233,12 +235,17 @@ function preconditions(snap: Snapshot, c: Classified, ob: Obligation, reply: Rep
         const entry = c.currentUnit?.members.find((m) => sameIssue(m.issue, d.member));
         if (entry === undefined || outcomeOf(snap, entry).kind !== "noCode") return "reopenAccepted 只适用于结局为 noCode 的成员；已合并的成员请选 restore 或 correction。";
       }
-      const acceptanceMethod =
-        (d.subject === "question" && d.verdict.kind === "acceptanceMethod") ||
-        (d.subject === "findings" && d.perFinding.some((f) => f.verdict.kind === "acceptanceMethod"));
-      const member = c.member?.w.entry.issue ?? null;
-      if (acceptanceMethod && (member === null || !reply.bodyReplacements.some((b) => sameIssue(b.issue, member))))
-        return "acceptanceMethod 裁定必须附带对当前成员验收行的正文替换。";
+      const methodContext: Context | null =
+        d.subject === "question" && d.verdict.kind === "acceptanceMethod"
+          ? questionContext(snap, d.claim)
+          : d.subject === "findings" && d.perFinding.some((f) => f.verdict.kind === "acceptanceMethod") && c.member !== null
+            ? { kind: "member", member: c.member.w.entry.issue }
+            : null;
+      if (methodContext !== null) {
+        const owners = rowOwners(snap, methodContext);
+        if (!reply.bodyReplacements.some((b) => owners.some((o) => sameIssue(o, b.issue))))
+          return `acceptanceMethod 裁定必须附带正文替换，替换对象为验收行所在的 issue 之一：${owners.map(issueKey).join("、") || "（无）"}。`;
+      }
       if (d.subject === "findings") {
         for (const f of d.perFinding) if (f.verdict.kind === "designGap") {
           const bad = routeIssue(snap, c, f.verdict.route);
@@ -269,7 +276,8 @@ function routeIssue(snap: Snapshot, c: Classified, route: Route): string | null 
       const idx = c.units.findIndex((u) => u.members.some((m) => sameIssue(m.issue, route.carrier)));
       const cur = c.currentUnit === null ? -1 : c.units.indexOf(c.currentUnit);
       const carrier = c.units[idx]?.members.find((m) => sameIssue(m.issue, route.carrier));
-      const sameRepoOk = carrier !== undefined && carrier.target.repo.name === (c.member?.w.entry.target.repo.name ?? "");
+      const repo = c.member?.w.entry.target.repo ?? c.currentUnit?.top.target.repo;
+      const sameRepoOk = carrier !== undefined && repo !== undefined && carrier.target.repo.owner === repo.owner && carrier.target.repo.name === repo.name;
       return idx > cur && sameRepoOk ? null : "future 路线的承载者必须与 commit 同 repo，并位于当前单元之后；没有合适的承载者时请附设计承接项草稿。";
     }
     default:
@@ -281,6 +289,12 @@ function rowsMatch(snap: Snapshot, issueRef: IssueRef | null, rows: readonly str
   const issue = issueRef === null ? undefined : snap.issues.find((i) => sameIssue(i.ref, issueRef));
   if (issue === undefined) return "找不到验收行所属的 issue。";
   return sameSet(issue.acceptanceRows, rows) ? null : "验收行 id 集合与 issue 的验收行不一致（缺行或重复）。";
+}
+
+/** Context of the question a `claim(question)` decision answers (null when the record is not a question). */
+function questionContext(snap: Snapshot, claimId: RecordId): Context | null {
+  const r = snap.records.find((x) => x.id === claimId);
+  return r !== undefined && r.body.kind === "claim" && r.body.claim.kind === "question" ? r.body.claim.context : null;
 }
 
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
