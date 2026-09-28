@@ -1,0 +1,20 @@
+{
+  "name": "omp-roundtable",
+  "version": "0.1.0",
+  "description": "Round-table delivery for Oh My Pi: seats hold identity tickets derived from GitHub facts.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi-extension", "omp"],
+  "files": ["src/", "docs/", "README.md", "LICENSE"],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.3.14"
+  }
+}
