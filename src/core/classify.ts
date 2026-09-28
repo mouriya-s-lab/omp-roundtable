@@ -160,6 +160,9 @@ export interface EffectWitness {
   readonly id: ObligationId;
   readonly target: EffectTarget;
   readonly unit: IssueRef | null;
+  /** Obligation pinned (effect id, failure time) for the latest failure (core.md §4 effect failures). */
+  readonly failedId: ObligationId | null;
+  readonly conflictId: ObligationId;
 }
 
 export interface SeatWitness {
@@ -193,6 +196,19 @@ export interface Classified {
   readonly seats: readonly { readonly state: SeatState; readonly w: SeatWitness }[];
   readonly pendingAcks: readonly PendingAck[];
   readonly stall: { readonly key: Hash; readonly external: boolean; readonly id: ObligationId };
+  /** Pin hashed into each obligation id minted by this classification; realize shows it in the brief identity block. */
+  readonly pins: ReadonlyMap<ObligationId, unknown>;
+}
+
+/** Mints an obligation id and records the pin it hashed (one per classify call). */
+type Mint = (kind: string, context: unknown, pin: unknown, attempt: number) => ObligationId;
+
+function minter(pins: Map<ObligationId, unknown>): Mint {
+  return (kind, context, pin, attempt) => {
+    const id = obligationId(kind, context, pin, attempt);
+    pins.set(id, pin);
+    return id;
+  };
 }
 
 // ---------------------------------------------------------------- record access
@@ -446,7 +462,7 @@ function seatState(host: Host, snap: Snapshot, name: string): { state: SeatState
   return { state: "absent", holder: holderId, pending: null, woken };
 }
 
-function seatWitness(host: Host, snap: Snapshot, role: SeatRole, issue: IssueRef, name: string): { state: SeatState; w: SeatWitness } {
+function seatWitness(mint: Mint, host: Host, snap: Snapshot, role: SeatRole, issue: IssueRef, name: string): { state: SeatState; w: SeatWitness } {
   const st = seatState(host, snap, name);
   return {
     state: st.state,
@@ -457,8 +473,8 @@ function seatWitness(host: Host, snap: Snapshot, role: SeatRole, issue: IssueRef
       holder: st.holder,
       pending: st.pending,
       wokenCount: st.woken,
-      spawnId: obligationId("spawn", name, st.holder, 1),
-      wakeId: st.holder === null ? null : obligationId("wake", name, { agent: st.holder, count: st.woken }, 1),
+      spawnId: mint("spawn", "seat", { requestName: name, previous: st.holder }, 1),
+      wakeId: st.holder === null ? null : mint("wake", "seat", { agent: st.holder, count: st.woken }, 1),
     },
   };
 }
@@ -466,9 +482,11 @@ function seatWitness(host: Host, snap: Snapshot, role: SeatRole, issue: IssueRef
 // ---------------------------------------------------------------- main entry
 
 export function classify(snap: Snapshot, host: Host): Classified {
+  const pins = new Map<ObligationId, unknown>();
+  const mint = minter(pins);
   const units = computeUnits(snap);
-  const effects = classifyEffects(snap, host, units);
-  const unitTerminal = (u: Unit): boolean => terminal(snap, u, effects);
+  const effects = classifyEffects(mint, snap, host, units);
+  const unitTerminal = (u: Unit): boolean => terminal(mint, snap, u, effects);
   const currentUnit = units.find((u) => !unitTerminal(u)) ?? null;
 
   let member: Classified["member"] = null;
@@ -477,24 +495,24 @@ export function classify(snap: Snapshot, host: Host): Classified {
   const seats: { state: SeatState; w: SeatWitness }[] = [];
 
   if (currentUnit !== null) {
-    for (const m of currentUnit.members) reconcile.push(classifyReconcile(snap, currentUnit, m));
+    for (const m of currentUnit.members) reconcile.push(classifyReconcile(mint, snap, currentUnit, m));
     const active = currentUnit.members.find((m) => outcomeOf(snap, m).kind === "pending" && issueOf(snap, m.issue)?.open === true);
     const blockedClosed = currentUnit.members.some((m) => outcomeOf(snap, m).kind === "pending" && issueOf(snap, m.issue)?.open === false);
     if (active !== undefined && !blockedClosed) {
-      member = classifyMember(snap, host, active, effects);
-      if (!active.designOnly) seats.push(seatWitness(host, snap, "owner", active.issue, member.w.names.owner));
-      if (member.w.names.review !== null) seats.push(seatWitness(host, snap, "review", active.issue, member.w.names.review));
-      if (member.w.names.accept !== null) seats.push(seatWitness(host, snap, "accept", active.issue, member.w.names.accept));
+      member = classifyMember(mint, snap, host, active, effects);
+      if (!active.designOnly) seats.push(seatWitness(mint, host, snap, "owner", active.issue, member.w.names.owner));
+      if (member.w.names.review !== null) seats.push(seatWitness(mint, host, snap, "review", active.issue, member.w.names.review));
+      if (member.w.names.accept !== null) seats.push(seatWitness(mint, host, snap, "accept", active.issue, member.w.names.accept));
     } else if (active === undefined && !blockedClosed) {
-      verification = classifyVerification(snap, currentUnit);
-      seats.push(seatWitness(host, snap, "postMerge", currentUnit.top.issue, verification.w.name));
+      verification = classifyVerification(mint, snap, currentUnit);
+      seats.push(seatWitness(mint, host, snap, "postMerge", currentUnit.top.issue, verification.w.name));
     }
   }
 
-  const closure = classifyClosure(snap, units, currentUnit === null);
-  if (closure.w.name !== null && snap.agenda.parent !== null) seats.push(seatWitness(host, snap, "closure", snap.agenda.parent, closure.w.name));
+  const closure = classifyClosure(mint, snap, units, currentUnit === null);
+  if (closure.w.name !== null && snap.agenda.parent !== null) seats.push(seatWitness(mint, host, snap, "closure", snap.agenda.parent, closure.w.name));
 
-  const subjects = classifySubjects(snap, units);
+  const subjects = classifySubjects(mint, snap, units);
 
   const pendingAcks: PendingAck[] = [];
   const allNames = new Set(seats.map((s) => s.w.requestName));
@@ -505,7 +523,7 @@ export function classify(snap: Snapshot, host: Host): Classified {
     if (acked || allNames.has(name)) continue;
     const prev = decisionsOf(snap, "seated").filter((r) => r.body.decision.subject === "seated" && r.body.decision.requestName === name).at(-1);
     const previous = prev !== undefined && prev.body.decision.subject === "seated" ? prev.body.decision.agentId : null;
-    pendingAcks.push({ requestName: name, agentId: a.id, previous, issue: null, id: obligationId("spawn", name, previous, 1) });
+    pendingAcks.push({ requestName: name, agentId: a.id, previous, issue: null, id: mint("spawn", "seat", { requestName: name, previous }, 1) });
   }
 
   const stallKey = fnv64(
@@ -531,17 +549,18 @@ export function classify(snap: Snapshot, host: Host): Classified {
     effects,
     seats,
     pendingAcks,
-    stall: { key: stallKey, external: stallDecided, id: obligationId("decideStall", "agenda", stallKey, 1) },
+    stall: { key: stallKey, external: stallDecided, id: mint("decideStall", "agenda", stallKey, 1) },
+    pins,
   };
 }
 
 // ---------------------------------------------------------------- terminality
 
-function terminal(snap: Snapshot, unit: Unit, effects: readonly { s: EffectSituation; w: EffectWitness }[]): boolean {
+function terminal(mint: Mint, snap: Snapshot, unit: Unit, effects: readonly { s: EffectSituation; w: EffectWitness }[]): boolean {
   const outcomes = unit.members.map((m) => outcomeOf(snap, m));
   if (outcomes.some((o) => o.kind === "pending")) return false;
   for (const m of unit.members) {
-    const r = classifyReconcile(snap, unit, m).s;
+    const r = classifyReconcile(mint, snap, unit, m).s;
     if (r.open && (r.neverClosedSinceOutcome || r.reopenUndecided || r.reopenDecision !== "none")) return false;
   }
   const unitEffectsPending = effects.some(
@@ -549,13 +568,13 @@ function terminal(snap: Snapshot, unit: Unit, effects: readonly { s: EffectSitua
   );
   if (unitEffectsPending) return false;
   if (outcomes.every((o) => o.kind === "noCode")) return true;
-  const v = classifyVerification(snap, unit);
+  const v = classifyVerification(mint, snap, unit);
   return v.s.postMerge === "validPass";
 }
 
 // ---------------------------------------------------------------- reconcile
 
-function classifyReconcile(snap: Snapshot, unit: Unit, entry: Entry): { s: ReconcileSituation; w: ReconcileWitness } {
+function classifyReconcile(mint: Mint, snap: Snapshot, unit: Unit, entry: Entry): { s: ReconcileSituation; w: ReconcileWitness } {
   const issue = issueOf(snap, entry.issue);
   const outcome = outcomeOf(snap, entry);
   const events = issue?.events ?? [];
@@ -574,7 +593,7 @@ function classifyReconcile(snap: Snapshot, unit: Unit, entry: Entry): { s: Recon
           .filter((r) => r.body.decision.subject === "closed" && r.body.decision.event === lastClose.id && r.body.decision.bodyHash === issue.bodyHash)
           .at(-1);
   const closedByMerge = outcome.kind === "delivered";
-  const unitPostMergePass = classifyVerification(snap, unit).s.postMerge === "validPass";
+  const unitPostMergePass = classifyVerification(mint, snap, unit).s.postMerge === "validPass";
   const s: ReconcileSituation = {
     outcome: outcome.kind,
     open: issue?.open ?? false,
@@ -596,10 +615,10 @@ function classifyReconcile(snap: Snapshot, unit: Unit, entry: Entry): { s: Recon
       eventForDecision: s.open ? (lastReopen?.id ?? null) : (lastClose?.id ?? null),
       bodyHash: issue?.bodyHash ?? null,
       ids: {
-        close: obligationId("close", ctx, { reopen: lastReopen?.id ?? null, decision: reopenDecisionRec?.id ?? null }, 1),
-        reopen: obligationId("reopen", ctx, { close: lastClose?.id ?? null, decision: closedDecisionRec?.id ?? null }, 1),
-        decideReopened: lastReopen === null ? null : obligationId("decideReopened", ctx, lastReopen.id, 1),
-        decideClosed: lastClose === null || issue === null ? null : obligationId("decideClosed", ctx, { event: lastClose.id, body: issue.bodyHash }, 1),
+        close: mint("close", ctx, { reopen: lastReopen?.id ?? null, decision: reopenDecisionRec?.id ?? null }, 1),
+        reopen: mint("reopen", ctx, { close: lastClose?.id ?? null, decision: closedDecisionRec?.id ?? null }, 1),
+        decideReopened: lastReopen === null ? null : mint("decideReopened", ctx, lastReopen.id, 1),
+        decideClosed: lastClose === null || issue === null ? null : mint("decideClosed", ctx, { event: lastClose.id, body: issue.bodyHash }, 1),
       },
     },
   };
@@ -608,6 +627,7 @@ function classifyReconcile(snap: Snapshot, unit: Unit, entry: Entry): { s: Recon
 // ---------------------------------------------------------------- member
 
 function classifyMember(
+  mint: Mint,
   snap: Snapshot,
   host: Host,
   entry: Entry,
@@ -650,7 +670,7 @@ function classifyMember(
   const designCommits = contract.commits;
 
   const deliverAttempt = 1 + ourAbandoned;
-  const deliverId = obligationId("deliver", ctx, { body: null }, deliverAttempt);
+  const deliverId = mint("deliver", ctx, { body: null }, deliverAttempt);
 
   // materialization: PR carries the latest submit; contract effects for this member applied
   const memberEffectsPending = effects.some(
@@ -757,9 +777,9 @@ function classifyMember(
                     : failedRun !== null
                       ? { kind: "checksFail", runId: failedRun }
                       : null;
-  const fixId = fixTrigger === null ? null : obligationId("fix", ctx, fixTrigger, 1);
+  const fixId = fixTrigger === null ? null : mint("fix", ctx, fixTrigger, 1);
   const completed = (id: ObligationId | null): boolean => id !== null && snap.records.some((r) => r.obligation === id);
-  const checksRunFixed = failedRun !== null && completed(obligationId("fix", ctx, { kind: "checksFail", runId: failedRun }, 1));
+  const checksRunFixed = failedRun !== null && completed(mint("fix", ctx, { kind: "checksFail", runId: failedRun }, 1));
 
   const externalBlock =
     checksDecided === "external" ||
@@ -767,15 +787,15 @@ function classifyMember(
 
   const reviewPinHash = reviewManifest === null ? null : fnv64(manifestKey(reviewManifest));
   const acceptPinHash = acceptManifest === null ? null : fnv64(manifestKey(acceptManifest));
-  const reviewId = reviewManifest === null ? null : obligationId("review", ctx, reviewManifest, review.attempt);
-  const acceptId = acceptManifest === null ? null : obligationId("accept", ctx, acceptManifest, accept.attempt);
+  const reviewId = reviewManifest === null ? null : mint("review", ctx, reviewManifest, review.attempt);
+  const acceptId = acceptManifest === null ? null : mint("accept", ctx, acceptManifest, accept.attempt);
 
   const s: MemberSituation = {
     designOnly: entry.designOnly,
     claim: claim === null ? "none" : claim.body.claim.kind,
     ours: pr === null ? "none" : "maintainable",
     foreign: foreign.length > 0,
-    foreignNoticed: pr !== null && snap.effectMarkers.includes(obligationId("noticeForeignPr", ctx, prKey(pr.ref), 1)),
+    foreignNoticed: pr !== null && snap.effectMarkers.includes(mint("noticeForeignPr", ctx, prKey(pr.ref), 1)),
     materialized: memberEffectsPending || headMoved || (latestSubmit !== null && (pr === null ? true : pr.appliedSubmit !== latestSubmit.id)) ? "pending" : "settled",
     review: review.state,
     accept: accept.state,
@@ -813,17 +833,17 @@ function classifyMember(
         fix: fixId,
         review: reviewId,
         accept: acceptId,
-        merge: pr === null ? null : obligationId("merge", ctx, { pr: prKey(pr.ref), head: pr.head }, 1),
-        noticeForeignPr: pr === null ? null : obligationId("noticeForeignPr", ctx, prKey(pr.ref), 1),
-        decideClaim: claim === null ? null : obligationId("decideClaim", ctx, claim.id, 1),
+        merge: pr === null ? null : mint("merge", ctx, { pr: prKey(pr.ref), head: pr.head }, 1),
+        noticeForeignPr: pr === null ? null : mint("noticeForeignPr", ctx, prKey(pr.ref), 1),
+        decideClaim: claim === null ? null : mint("decideClaim", ctx, claim.id, 1),
         decideFindings:
           review.state === "validFailUnadjudicated" && review.latestValid !== null
-            ? obligationId("decideFindings", ctx, review.latestValid.id, 1)
+            ? mint("decideFindings", ctx, review.latestValid.id, 1)
             : accept.state === "validFailUnadjudicated" && accept.latestValid !== null
-              ? obligationId("decideFindings", ctx, accept.latestValid.id, 1)
+              ? mint("decideFindings", ctx, accept.latestValid.id, 1)
               : null,
-        designFix: mainVerdict === null ? null : obligationId("designFix", ctx, mainVerdict.id, 1),
-        decideChecks: failedRun === null ? null : obligationId("decideChecks", ctx, failedRun, 1),
+        designFix: mainVerdict === null ? null : mint("designFix", ctx, mainVerdict.id, 1),
+        decideChecks: failedRun === null ? null : mint("decideChecks", ctx, failedRun, 1),
       },
       names: {
         owner: requestName("owner", ref, null, 1),
@@ -904,13 +924,13 @@ function reverifyCount(snap: Snapshot, verdicts: readonly VerdictRecord[], subje
   return n;
 }
 
-function classifyVerification(snap: Snapshot, unit: Unit): { s: VerificationSituation; w: VerificationWitness } {
+function classifyVerification(mint: Mint, snap: Snapshot, unit: Unit): { s: VerificationSituation; w: VerificationWitness } {
   const ctx = `verify:${issueKey(unit.top.issue)}`;
   const { manifest, legacy } = unitManifest(snap, unit);
   const verdicts = verdictsOf(snap).filter((v) => v.body.verdict.gate === "postMerge" && v.idempotencyKey.startsWith(`${ctx}|`));
   const attempt = 1 + reverifyCount(snap, verdicts, "postMergeFail", manifest);
   const valid = verdicts.filter((v) => v.manifest !== null && manifestKey(v.manifest) === manifestKey(manifest));
-  const id = obligationId("postMerge", ctx, manifest, attempt);
+  const id = mint("postMerge", ctx, manifest, attempt);
   const current = valid.filter((v) => v.obligation === id).at(-1) ?? null;
   const failDecisionRec =
     current === null ? undefined : decisionsOf(snap, "postMergeFail").find((r) => r.body.decision.subject === "postMergeFail" && r.body.decision.verdictRecord === current.id);
@@ -948,8 +968,8 @@ function classifyVerification(snap: Snapshot, unit: Unit): { s: VerificationSitu
       failing: state === "validFailUnadjudicated" ? current : null,
       ids: {
         postMerge: id,
-        decideClaim: claim === null ? null : obligationId("decideClaim", ctx, claim.id, 1),
-        decidePostMergeFail: current === null ? null : obligationId("decidePostMergeFail", ctx, current.id, 1),
+        decideClaim: claim === null ? null : mint("decideClaim", ctx, claim.id, 1),
+        decidePostMergeFail: current === null ? null : mint("decidePostMergeFail", ctx, current.id, 1),
       },
       name: requestName("postMerge", unit.top.issue, fnv64(manifestKey(manifest)), attempt),
     },
@@ -958,15 +978,15 @@ function classifyVerification(snap: Snapshot, unit: Unit): { s: VerificationSitu
 
 // ---------------------------------------------------------------- closure
 
-function classifyClosure(snap: Snapshot, units: readonly Unit[], allTerminal: boolean): { s: ClosureSituation; w: ClosureWitness } {
+function classifyClosure(mint: Mint, snap: Snapshot, units: readonly Unit[], allTerminal: boolean): { s: ClosureSituation; w: ClosureWitness } {
   const ctx = "closure";
   const parentRef = snap.agenda.parent;
   const parent = parentRef === null ? null : issueOf(snap, parentRef);
   const stranded = strandedDesignCommits(snap, units);
   const reported = decisionsOf(snap, "report").length > 0;
-  const reportId = obligationId("report", ctx, null, 1);
-  const closeParent = obligationId("closeParent", ctx, null, 1);
-  const reopenParent = obligationId("reopenParent", ctx, null, 1);
+  const reportId = mint("report", ctx, null, 1);
+  const closeParent = mint("closeParent", ctx, null, 1);
+  const reopenParent = mint("reopenParent", ctx, null, 1);
   if (parentRef === null || parent === null) {
     return {
       s: { allUnitsTerminal: allTerminal, strandedDesign: stranded.length > 0, parent: "none", claim: "none", closure: "none", failDecision: "none", reported },
@@ -994,7 +1014,7 @@ function classifyClosure(snap: Snapshot, units: readonly Unit[], allTerminal: bo
   const manifest: Manifest = { gate: "closure", merges, parentBodyHash: parent.bodyHash, children, strandedDesign: stranded };
   const verdicts = verdictsOf(snap).filter((v) => v.body.verdict.gate === "closure");
   const attempt = 1 + reverifyCount(snap, verdicts, "closureFail", manifest);
-  const id = obligationId("closure", ctx, manifest, attempt);
+  const id = mint("closure", ctx, manifest, attempt);
   const current = verdicts.filter((v) => v.obligation === id).at(-1) ?? null;
   const failDecisionRec =
     current === null ? undefined : decisionsOf(snap, "closureFail").find((r) => r.body.decision.subject === "closureFail" && r.body.decision.verdictRecord === current.id);
@@ -1024,8 +1044,8 @@ function classifyClosure(snap: Snapshot, units: readonly Unit[], allTerminal: bo
       failing: state === "validFailUnadjudicated" ? current : null,
       ids: {
         closure: id,
-        decideClaim: claim === null ? null : obligationId("decideClaim", ctx, claim.id, 1),
-        decideClosureFail: current === null ? null : obligationId("decideClosureFail", ctx, current.id, 1),
+        decideClaim: claim === null ? null : mint("decideClaim", ctx, claim.id, 1),
+        decideClosureFail: current === null ? null : mint("decideClosureFail", ctx, current.id, 1),
         closeParent,
         reopenParent,
         report: reportId,
@@ -1113,7 +1133,7 @@ function strandedDesignCommits(snap: Snapshot, units: readonly Unit[]): Sha[] {
   return out;
 }
 
-function classifySubjects(snap: Snapshot, units: readonly Unit[]): { s: SubjectSituation; w: SubjectWitness }[] {
+function classifySubjects(mint: Mint, snap: Snapshot, units: readonly Unit[]): { s: SubjectSituation; w: SubjectWitness }[] {
   const out: { s: SubjectSituation; w: SubjectWitness }[] = [];
   const keyed = (subject: "orphanDesign" | "migration" | "agendaGap", key: Hash): SubjectSituation => {
     const d = decisionsOf(snap, subject).filter((r) => (r.body.decision.subject === subject ? r.body.decision.key === key : false)).at(-1);
@@ -1123,7 +1143,7 @@ function classifySubjects(snap: Snapshot, units: readonly Unit[]): { s: SubjectS
     const unrelated = v.body.verdict.gate === "accept" || v.body.verdict.gate === "postMerge" ? v.body.verdict.unrelated : [];
     if (unrelated.length === 0) continue;
     const decided = decisionsOf(snap, "unrelated").some((r) => r.body.decision.subject === "unrelated" && r.body.decision.verdictRecord === v.id);
-    out.push({ s: { decided: decided ? "resolved" : "none" }, w: { subject: "unrelated", verdict: v, id: obligationId("decideUnrelated", "agenda", v.id, 1) } });
+    out.push({ s: { decided: decided ? "resolved" : "none" }, w: { subject: "unrelated", verdict: v, id: mint("decideUnrelated", "agenda", v.id, 1) } });
   }
   const carrierGone = (carrier: IssueRef | null): boolean => {
     if (carrier === null) return true;
@@ -1134,7 +1154,7 @@ function classifySubjects(snap: Snapshot, units: readonly Unit[]): { s: SubjectS
   for (const { route, carrier } of designRoutes(snap)) {
     if (!strandedSet.has(route.commit) || !carrierGone(carrier)) continue;
     const key = fnv64(route.commit);
-    out.push({ s: keyed("orphanDesign", key), w: { subject: "orphanDesign", commit: route.commit, key, id: obligationId("decideOrphanDesign", "agenda", key, 1) } });
+    out.push({ s: keyed("orphanDesign", key), w: { subject: "orphanDesign", commit: route.commit, key, id: mint("decideOrphanDesign", "agenda", key, 1) } });
   }
   for (const { decision, route } of designRoutes(snap)) {
     if (route.kind !== "defaultFirst" || route.migration === null) continue;
@@ -1143,7 +1163,7 @@ function classifySubjects(snap: Snapshot, units: readonly Unit[]): { s: SubjectS
     const failed = issue !== null && !issue.open && (entry === undefined || outcomeOf(snap, entry).kind !== "delivered");
     if (!failed) continue;
     const key = fnv64(`${decision.id}`);
-    out.push({ s: keyed("migration", key), w: { subject: "migration", decision, migration: route.migration, key, id: obligationId("decideMigration", "agenda", key, 1) } });
+    out.push({ s: keyed("migration", key), w: { subject: "migration", decision, migration: route.migration, key, id: mint("decideMigration", "agenda", key, 1) } });
   }
   const parent = snap.agenda.parent === null ? null : issueOf(snap, snap.agenda.parent);
   if (parent !== null) {
@@ -1151,7 +1171,7 @@ function classifySubjects(snap: Snapshot, units: readonly Unit[]): { s: SubjectS
     for (const child of parent.children) {
       if (issueOf(snap, child)?.isAgendaRecord === true || inAgenda(child) || childTerminal(snap, child) !== null) continue;
       const key = fnv64(issueKey(child));
-      out.push({ s: keyed("agendaGap", key), w: { subject: "agendaGap", child, key, id: obligationId("decideAgendaGap", "agenda", key, 1) } });
+      out.push({ s: keyed("agendaGap", key), w: { subject: "agendaGap", child, key, id: mint("decideAgendaGap", "agenda", key, 1) } });
     }
   }
   return out;
@@ -1159,19 +1179,29 @@ function classifySubjects(snap: Snapshot, units: readonly Unit[]): { s: SubjectS
 
 // ---------------------------------------------------------------- effects (agenda-wide)
 
-function classifyEffects(snap: Snapshot, host: Host, units: readonly Unit[]): { s: EffectSituation; w: EffectWitness }[] {
+function classifyEffects(mint: Mint, snap: Snapshot, host: Host, units: readonly Unit[]): { s: EffectSituation; w: EffectWitness }[] {
   const out: { s: EffectSituation; w: EffectWitness }[] = [];
   const unitOf = (ref: IssueRef): IssueRef | null => units.find((u) => u.members.some((m) => sameIssue(m.issue, ref)))?.top.issue ?? null;
   const push = (id: ObligationId, target: EffectTarget, unit: IssueRef | null, fulfilled: boolean, conflict = false): void => {
-    out.push({ s: { fulfilled, failure: failureState(snap, host.failures, id), conflict }, w: { id, target, unit } });
+    const latest = host.failures.filter((f) => f.effect === id).at(-1);
+    out.push({
+      s: { fulfilled, failure: failureState(snap, id, latest?.at ?? null), conflict },
+      w: {
+        id,
+        target,
+        unit,
+        failedId: latest === undefined ? null : mint("decideEffectFailed", "agenda", { effect: id, failedAt: latest.at }, 1),
+        conflictId: mint("decideEffectConflict", "agenda", id, 1),
+      },
+    });
   };
 
   const agendaIssue = issueOf(snap, snap.agenda.record);
-  push(obligationId("closeAgenda", "agenda", null, 1), { kind: "closeAgenda" }, null, agendaIssue !== null && !agendaIssue.open);
+  push(mint("closeAgenda", "agenda", null, 1), { kind: "closeAgenda" }, null, agendaIssue !== null && !agendaIssue.open);
   if (snap.agenda.parent !== null) {
     const parent = issueOf(snap, snap.agenda.parent);
     const attached = parent !== null && parent.children.some((c) => sameIssue(c, snap.agenda.record));
-    push(obligationId("attachAgenda", "agenda", null, 1), { kind: "attachAgenda", parent: snap.agenda.parent }, null, attached);
+    push(mint("attachAgenda", "agenda", null, 1), { kind: "attachAgenda", parent: snap.agenda.parent }, null, attached);
   }
 
   // PR materialization: only the latest PrSubmit per member applies
@@ -1191,7 +1221,7 @@ function classifyEffects(snap: Snapshot, host: Host, units: readonly Unit[]): { 
     if (ours.some((p) => p.state.kind === "merged")) continue;
     const pr = ours.find((p) => p.state.kind === "open") ?? null;
     const kind = pr === null ? "openPr" : "updatePr";
-    push(obligationId(kind, issueKey(member), r.id, 1), { kind, submit: r, pr: pr?.ref ?? null }, unitOf(member), pr !== null && pr.appliedSubmit === r.id);
+    push(mint(kind, issueKey(member), r.id, 1), { kind, submit: r, pr: pr?.ref ?? null }, unitOf(member), pr !== null && pr.appliedSubmit === r.id);
   }
 
   // body replacements, drafts, notices
@@ -1205,7 +1235,7 @@ function classifyEffects(snap: Snapshot, host: Host, units: readonly Unit[]): { 
         .some((later) => later.body.bodyReplacements.some((b) => sameIssue(b.issue, rep.issue)) && issue !== null && issue.appliedDecisions.includes(later.id));
       const conflict = !applied && !supersededByLater && issue !== null && issue.bodyHash !== rep.baseHash;
       push(
-        obligationId("applyBody", issueKey(rep.issue), r.id, 1),
+        mint("applyBody", issueKey(rep.issue), r.id, 1),
         { kind: "applyBody", decision: r.id, replacement: rep },
         unitOf(rep.issue),
         applied || supersededByLater,
@@ -1216,28 +1246,27 @@ function classifyEffects(snap: Snapshot, host: Host, units: readonly Unit[]): { 
     if ((d.subject === "question" && (d.verdict.kind === "designGap" || d.verdict.kind === "acceptanceMethod")) || d.subject === "findings") {
       const affected = d.subject === "question" ? d.affected : r.body.bodyReplacements.map((b) => b.issue);
       for (const issue of affected) {
-        const id = obligationId("noticeDecision", issueKey(issue), r.id, 1);
+        const id = mint("noticeDecision", issueKey(issue), r.id, 1);
         push(id, { kind: "noticeDecision", decision: r.id, issue }, unitOf(issue), snap.effectMarkers.includes(id));
       }
     }
     if (d.subject === "checks" && d.verdict === "rerun") {
       const pr = snap.prs.find((p) => p.ref.number === d.pr.number && sameRepo(p.ref.repo, d.pr.repo));
       const rerun = pr !== undefined && pr.checks.latestRunCreatedAt !== null && pr.checks.latestRunCreatedAt > r.at;
-      push(obligationId("rerunChecks", "agenda", r.id, 1), { kind: "rerunChecks", decision: r.id, pr: d.pr }, null, rerun);
+      push(mint("rerunChecks", "agenda", r.id, 1), { kind: "rerunChecks", decision: r.id, pr: d.pr }, null, rerun);
     }
   }
   for (const d of draftEntries(snap)) {
     const anchorUnit = d.draft.anchor.kind === "outsideAgenda" ? null : unitOf(d.draft.anchor.entry);
-    push(obligationId("createIssue", "agenda", d.draftId, 1), { kind: "createIssue", draftId: d.draftId, draft: d.draft }, anchorUnit, d.issue !== null);
+    push(mint("createIssue", "agenda", d.draftId, 1), { kind: "createIssue", draftId: d.draftId, draft: d.draft }, anchorUnit, d.issue !== null);
   }
   return out;
 }
 
-function failureState(snap: Snapshot, failures: readonly EffectFailure[], id: ObligationId): EffectSituation["failure"] {
-  const latest = failures.filter((f) => f.effect === id).at(-1);
-  if (latest === undefined) return "none";
+function failureState(snap: Snapshot, id: ObligationId, latestAt: Millis | null): EffectSituation["failure"] {
+  if (latestAt === null) return "none";
   const decision = decisionsOf(snap, "effectFailed")
-    .filter((r) => r.body.decision.subject === "effectFailed" && r.body.decision.effect === id && r.body.decision.failedAt === latest.at)
+    .filter((r) => r.body.decision.subject === "effectFailed" && r.body.decision.effect === id && r.body.decision.failedAt === latestAt)
     .at(-1);
   if (decision === undefined || decision.body.decision.subject !== "effectFailed") return "unadjudicated";
   return decision.body.decision.verdict;
