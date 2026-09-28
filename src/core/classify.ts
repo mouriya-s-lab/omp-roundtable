@@ -67,6 +67,8 @@ export type FixTrigger =
   | { readonly kind: "implDefect"; readonly id: RecordId }
   | { readonly kind: "fixNeeded"; readonly id: RecordId }
   | { readonly kind: "designFix"; readonly commit: Sha }
+  | { readonly kind: "designMerge"; readonly commit: Sha }
+  | { readonly kind: "headMoved"; readonly head: Sha }
   | { readonly kind: "conflict"; readonly head: Sha }
   | { readonly kind: "checksFail"; readonly runId: string };
 
@@ -360,25 +362,34 @@ interface GateEval {
   readonly attempt: number;
 }
 
-function evaluateGate(snap: Snapshot, candidates: readonly VerdictRecord[], currentFor: (v: VerdictRecord | null) => Manifest): GateEval {
+/**
+ * A failing verdict is superseded (a fresh gate attempt is due) when its findings are all rejected/outOfScope,
+ * or when the owner has answered its upheld findings with a later PrSubmit on the same pin (evidence-only fix).
+ */
+function evaluateGate(
+  snap: Snapshot,
+  candidates: readonly VerdictRecord[],
+  currentFor: (v: VerdictRecord | null) => Manifest,
+  answeredAfter: (at: Millis) => boolean,
+): GateEval {
   const current = currentFor(null);
+  const supersededBy = (v: VerdictRecord): boolean => {
+    if (!verdictFails(v.body.verdict)) return false;
+    const adj = findingsDecision(snap, v.id);
+    if (adj === null || adj.body.decision.subject !== "findings") return false;
+    const dismissed = adj.body.decision.perFinding.every((f) => f.verdict.kind === "rejected" || f.verdict.kind === "outOfScope");
+    return dismissed || answeredAfter(adj.at);
+  };
   let superseded = 0;
   let latestValid: VerdictRecord | null = null;
   let anyStale = false;
   for (const v of candidates) {
     if (v.manifest === null) continue;
-    const valid = manifestKey(v.manifest) === manifestKey(currentFor(v));
-    if (!valid) {
+    if (manifestKey(v.manifest) !== manifestKey(currentFor(v))) {
       anyStale = true;
       continue;
     }
-    const failing = verdictFails(v.body.verdict);
-    const adj = failing ? findingsDecision(snap, v.id) : null;
-    const allDismissed =
-      adj !== null &&
-      adj.body.decision.subject === "findings" &&
-      adj.body.decision.perFinding.every((f) => f.verdict.kind === "rejected" || f.verdict.kind === "outOfScope");
-    if (allDismissed && manifestKey(v.manifest) === manifestKey(current)) superseded++;
+    if (supersededBy(v) && manifestKey(v.manifest) === manifestKey(current)) superseded++;
     latestValid = v;
   }
   const attempt = 1 + superseded;
@@ -386,8 +397,7 @@ function evaluateGate(snap: Snapshot, candidates: readonly VerdictRecord[], curr
   if (!verdictFails(latestValid.body.verdict)) return { state: "validPass", latestValid, attempt };
   const adj = findingsDecision(snap, latestValid.id);
   if (adj === null || adj.body.decision.subject !== "findings") return { state: "validFailUnadjudicated", latestValid, attempt };
-  const dismissed = adj.body.decision.perFinding.every((f) => f.verdict.kind === "rejected" || f.verdict.kind === "outOfScope");
-  return { state: dismissed ? "superseded" : "validFailAdjudicated", latestValid, attempt };
+  return { state: supersededBy(latestValid) ? "superseded" : "validFailAdjudicated", latestValid, attempt };
 }
 
 export function verdictFails(v: Verdict): boolean {
@@ -677,8 +687,9 @@ function classifyMember(
     });
     reviewManifest = reviewFor(null);
     acceptManifest = acceptFor();
-    review = evaluateGate(snap, reviewVerdicts, reviewFor);
-    accept = evaluateGate(snap, acceptVerdicts, () => acceptFor());
+    const answeredAfter = (at: Millis): boolean => submits.some((s) => s.at > at);
+    review = evaluateGate(snap, reviewVerdicts, reviewFor, answeredAfter);
+    accept = evaluateGate(snap, acceptVerdicts, () => acceptFor(), answeredAfter);
   }
 
   // repairs (only while the verdict that produced them is valid)
@@ -708,6 +719,10 @@ function classifyMember(
     designFixRec !== undefined && designFixRec.body.decision.subject === "designFix" && pr !== null && !contains(snap, pr.target.repo, pr.head, designFixRec.body.decision.commit)
       ? designFixRec.body.decision.commit
       : null;
+  const latestHead = latestSubmit !== null && latestSubmit.body.kind === "prSubmit" ? latestSubmit.body.head : null;
+  const headMoved = pr !== null && latestHead !== null && latestHead !== pr.head;
+  const requiredDesign = requiredDesignCommits(snap, ref);
+  const designMissing = pr === null ? null : (requiredDesign.find((d) => !contains(snap, pr.target.repo, pr.head, d)) ?? null);
 
   const ownerVerdict = [reviewValid, acceptValid].find((v) => v !== null && upheld(v, "owner")) ?? null;
   const mainVerdict = [reviewValid, acceptValid].find((v) => v !== null && upheld(v, "main") && designFixRec === undefined) ?? null;
@@ -715,19 +730,23 @@ function classifyMember(
   const fixTrigger: FixTrigger | null =
     pr === null
       ? null
-      : ownerVerdict !== null
-        ? { kind: "verdict", id: ownerVerdict.id }
-        : implDefect !== undefined
-          ? { kind: "implDefect", id: implDefect.id }
-          : fixNeeded !== undefined
-            ? { kind: "fixNeeded", id: fixNeeded.id }
-            : designFixUnmerged !== null
-              ? { kind: "designFix", commit: designFixUnmerged }
-              : pr.mergeable === "no"
-                ? { kind: "conflict", head: pr.head }
-                : failedRun !== null
-                  ? { kind: "checksFail", runId: failedRun }
-                  : null;
+      : headMoved
+        ? { kind: "headMoved", head: pr.head }
+        : ownerVerdict !== null
+          ? { kind: "verdict", id: ownerVerdict.id }
+          : implDefect !== undefined
+            ? { kind: "implDefect", id: implDefect.id }
+            : fixNeeded !== undefined
+              ? { kind: "fixNeeded", id: fixNeeded.id }
+              : designFixUnmerged !== null
+                ? { kind: "designFix", commit: designFixUnmerged }
+                : designMissing !== null
+                  ? { kind: "designMerge", commit: designMissing }
+                  : pr.mergeable === "no"
+                    ? { kind: "conflict", head: pr.head }
+                    : failedRun !== null
+                      ? { kind: "checksFail", runId: failedRun }
+                      : null;
   const fixId = fixTrigger === null ? null : obligationId("fix", ctx, fixTrigger, 1);
   const completed = (id: ObligationId | null): boolean => id !== null && snap.records.some((r) => r.obligation === id);
   const checksRunFixed = failedRun !== null && completed(obligationId("fix", ctx, { kind: "checksFail", runId: failedRun }, 1));
@@ -747,10 +766,10 @@ function classifyMember(
     ours: pr === null ? "none" : "maintainable",
     foreign: foreign.length > 0,
     foreignNoticed: pr !== null && snap.effectMarkers.includes(obligationId("noticeForeignPr", ctx, prKey(pr.ref), 1)),
-    materialized: memberEffectsPending || (latestSubmit !== null && (pr === null ? true : pr.appliedSubmit !== latestSubmit.id)) ? "pending" : "settled",
+    materialized: memberEffectsPending || headMoved || (latestSubmit !== null && (pr === null ? true : pr.appliedSubmit !== latestSubmit.id)) ? "pending" : "settled",
     review: review.state,
     accept: accept.state,
-    repairOwner: ownerVerdict !== null || implDefect !== undefined || fixNeeded !== undefined || designFixUnmerged !== null,
+    repairOwner: headMoved || ownerVerdict !== null || implDefect !== undefined || fixNeeded !== undefined || designFixUnmerged !== null || designMissing !== null,
     repairMain: mainVerdict !== null,
     mergeable: pr?.mergeable ?? "unknown",
     checks: pr?.checks.state ?? "unknown",
@@ -776,7 +795,7 @@ function classifyMember(
       reviewManifest,
       acceptManifest,
       attempts: { deliver: deliverAttempt, review: review.attempt, accept: accept.attempt },
-      designCommits,
+      designCommits: requiredDesign,
       ids: {
         deliver: deliverId,
         fix: fixId,
@@ -1014,14 +1033,51 @@ function childTerminal(snap: Snapshot, child: IssueRef): "merged" | "noCode" | n
 
 // ---------------------------------------------------------------- design commits and subjects
 
-function designRoutes(snap: Snapshot): { decision: DecisionRecord; route: Route }[] {
-  const out: { decision: DecisionRecord; route: Route }[] = [];
+interface DesignRoute {
+  readonly decision: DecisionRecord;
+  readonly route: Route;
+  /** Member whose PR must carry the commit: the asking member for withPr, the named carrier for future. */
+  readonly carrier: IssueRef | null;
+}
+
+function parseIssueKey(key: string): IssueRef | null {
+  const m = /^([^/|]+)\/([^#|]+)#(\d+)\|/.exec(key);
+  return m === null ? null : { repo: { owner: m[1] ?? "", name: m[2] ?? "" }, number: Number(m[3]) };
+}
+
+function designRoutes(snap: Snapshot): DesignRoute[] {
+  const out: DesignRoute[] = [];
+  const claimMember = (claimId: RecordId): IssueRef | null => {
+    const r = snap.records.find((x) => x.id === claimId);
+    if (r === undefined || r.body.kind !== "claim") return null;
+    const c = r.body.claim;
+    return c.kind === "question" ? (c.context.kind === "member" ? c.context.member : null) : c.member;
+  };
   for (const r of decisions(snap)) {
     const d = r.body.decision;
-    if (d.subject === "question" && d.verdict.kind === "designGap") out.push({ decision: r, route: d.verdict.route });
-    if (d.subject === "findings") for (const f of d.perFinding) if (f.verdict.kind === "designGap") out.push({ decision: r, route: f.verdict.route });
+    if (d.subject === "question" && d.verdict.kind === "designGap") {
+      const route = d.verdict.route;
+      const carrier = route.kind === "future" ? route.carrier : route.kind === "withPr" ? (claimMember(d.claim) ?? d.affected[0] ?? null) : null;
+      out.push({ decision: r, route, carrier });
+    }
+    if (d.subject === "findings") {
+      const verdict = snap.records.find((x) => x.id === d.verdictRecord);
+      const verdictMember = verdict === undefined ? null : parseIssueKey(verdict.idempotencyKey);
+      for (const f of d.perFinding) {
+        if (f.verdict.kind !== "designGap") continue;
+        const route = f.verdict.route;
+        out.push({ decision: r, route, carrier: route.kind === "future" ? route.carrier : route.kind === "withPr" ? verdictMember : null });
+      }
+    }
   }
   return out;
+}
+
+/** Design commits a member's PR must contain (withPr / future routes it carries, not yet on the default branch). */
+function requiredDesignCommits(snap: Snapshot, member: IssueRef): Sha[] {
+  return designRoutes(snap)
+    .filter((d) => d.carrier !== null && sameIssue(d.carrier, member) && !onDefault(snap, member.repo, d.route.commit))
+    .map((d) => d.route.commit);
 }
 
 function strandedDesignCommits(snap: Snapshot, units: readonly Unit[]): Sha[] {
@@ -1047,14 +1103,14 @@ function classifySubjects(snap: Snapshot, units: readonly Unit[]): { s: SubjectS
     const decided = decisionsOf(snap, "unrelated").some((r) => r.body.decision.subject === "unrelated" && r.body.decision.verdictRecord === v.id);
     out.push({ s: { decided: decided ? "resolved" : "none" }, w: { subject: "unrelated", verdict: v, id: obligationId("decideUnrelated", "agenda", v.id, 1) } });
   }
-  const carrierGone = (route: Route): boolean => {
-    if (route.kind !== "future") return true;
-    const entry = units.flatMap((u) => u.members).find((m) => sameIssue(m.issue, route.carrier));
+  const carrierGone = (carrier: IssueRef | null): boolean => {
+    if (carrier === null) return true;
+    const entry = units.flatMap((u) => u.members).find((m) => sameIssue(m.issue, carrier));
     return entry === undefined || outcomeOf(snap, entry).kind !== "pending";
   };
   const strandedSet = new Set(strandedDesignCommits(snap, units));
-  for (const { route } of designRoutes(snap)) {
-    if (!strandedSet.has(route.commit) || !carrierGone(route)) continue;
+  for (const { route, carrier } of designRoutes(snap)) {
+    if (!strandedSet.has(route.commit) || !carrierGone(carrier)) continue;
     const key = fnv64(route.commit);
     out.push({ s: keyed("orphanDesign", key), w: { subject: "orphanDesign", commit: route.commit, key, id: obligationId("decideOrphanDesign", "agenda", key, 1) } });
   }
