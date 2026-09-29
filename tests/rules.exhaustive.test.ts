@@ -41,7 +41,7 @@ import { MEMBER_STALLS } from "./support/stalls.ts";
 
 // Every output kind of every rules function (typed so a new kind is a compile error here).
 const MEMBER_KINDS: Record<MemberKind, true> = {
-  decideClaim: true, deliver: true, noticeForeignPr: true, decideFindings: true, fix: true,
+  decideClaim: true, deliver: true, decideFindings: true, fix: true,
   designFix: true, decideChecks: true, review: true, accept: true, merge: true,
 };
 const RECONCILE_KINDS: Record<ReconcileKind, true> = { close: true, reopen: true, decideReopened: true, decideClosed: true };
@@ -126,7 +126,7 @@ function memberCheck(s: MemberSituation, out: readonly Spec<MemberKind>[]): "ok"
 
 type Holder = Spec<string>["holder"];
 const HOLDER: Record<MemberKind, Holder> = {
-  decideClaim: "main", deliver: "owner", noticeForeignPr: "program", decideFindings: "main", fix: "owner",
+  decideClaim: "main", deliver: "owner", decideFindings: "main", fix: "owner",
   designFix: "main", decideChecks: "main", review: "gate", accept: "gate", merge: "program",
 };
 
@@ -182,7 +182,9 @@ describe("rule layer: exhaustive enumeration (core.md §6.1)", () => {
   test("EffectSituation", () => {
     sweep("EffectSituation", effectDomain, EFFECT_KINDS, effectRules, (s, out) => {
       if (s.fulfilled && out.length > 0) return "fulfilled effect still derived";
-      if (!s.fulfilled && out.length === 0 && !effectWaiting(s)) return "unfulfilled effect neither derived nor waiting";
+      // a conflict the main session resolved without a new replacement leaves nothing to do; derive's stall covers it
+      if (!s.fulfilled && out.length === 0 && !effectWaiting(s) && s.conflict !== "resolved") return "unfulfilled effect neither derived nor waiting";
+      if (s.conflict !== "none" && has(out, "execute")) return "execution over a body-replacement conflict";
       if (s.failure === "unadjudicated" && has(out, "execute")) return "execution not paused after an unadjudicated failure";
       if (s.failure === "external" && has(out, "execute")) return "execution during an external decision";
       return "ok";
@@ -193,7 +195,7 @@ describe("rule layer: exhaustive enumeration (core.md §6.1)", () => {
       if (s.needed && (s.seat === "absent" || s.seat === "pendingAck") && !has(out, "spawn")) return "needed seat not spawned";
       if (s.seat === "pendingAck" && !has(out, "spawn")) return "pending agent without a receipt obligation";
       if (s.needed && s.seat === "parked" && !has(out, "wake")) return "needed parked seat not woken";
-      if (s.seat === "live" && out.length > 0) return "live seat given a seat obligation";
+      if ((s.seat === "live" || s.seat === "parkedWoken") && out.length > 0) return "live or already-woken seat given a seat obligation";
       if (!s.needed && s.seat !== "pendingAck" && out.length > 0) return "unneeded seat acted on";
       return "ok";
     });

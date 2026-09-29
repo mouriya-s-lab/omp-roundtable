@@ -1,7 +1,7 @@
 // Deterministic identities: obligation ids, request names, work directories (core.md §3 义务、席位名).
 // Pure: no host crypto, so core stays host-independent and enumerable.
 
-import type { Hash, IssueRef, ObligationId, RepoRef } from "./types.ts";
+import type { Hash, IssueRef, ObligationId, PrRef, RepoRef, ReplyId } from "./types.ts";
 
 /** Stable serialization of plain data: object keys sorted, no whitespace. */
 export function canonical(value: unknown): string {
@@ -29,6 +29,16 @@ export function fnv64(text: string): Hash {
 
 export function obligationId(kind: string, context: unknown, pin: unknown, attempt: number): ObligationId {
   return `ob-${fnv64(canonical({ kind, context, pin, attempt }))}` as ObligationId;
+}
+
+/** Identity of an accepted reply: the ticket it answered plus its payload. */
+export function replyId(ticket: ObligationId | null, payload: unknown): ReplyId {
+  return `re-${fnv64(canonical({ ticket, payload }))}` as ReplyId;
+}
+
+/** core.md §1 正文哈希: CRLF → LF, trailing whitespace trimmed. Store and core hash bodies with this one function. */
+export function bodyHash(body: string): Hash {
+  return fnv64(body.replace(/\r\n/g, "\n").trimEnd());
 }
 
 const slug = (repo: RepoRef): string =>
@@ -62,4 +72,12 @@ export function issueKey(issue: IssueRef): string {
 
 export function sameIssue(a: IssueRef, b: IssueRef): boolean {
   return a.number === b.number && a.repo.owner === b.repo.owner && a.repo.name === b.repo.name;
+}
+
+export function sameRepo(a: RepoRef, b: RepoRef): boolean {
+  return a.owner === b.owner && a.name === b.name;
+}
+
+export function samePr(a: PrRef, b: PrRef): boolean {
+  return a.number === b.number && sameRepo(a.repo, b.repo);
 }
