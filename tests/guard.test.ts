@@ -11,8 +11,6 @@ const ready: MemberSituation = {
   designOnly: false,
   claim: "none",
   ours: "maintainable",
-  foreign: false,
-  foreignNoticed: false,
   materialized: "settled",
   review: "validPass",
   accept: "validPass",
@@ -30,7 +28,7 @@ const ready: MemberSituation = {
 function kindsFor(s: MemberSituation): string[] {
   const b = memberGamma(s, VARIANTS[0]);
   if (b.kind !== "built") throw new Error(b.reason);
-  const d = derive(b.snap, b.host, policy);
+  const d = derive(b.state, b.facts, b.host, policy);
   expect(d.classified.member?.s).toEqual(s);
   return d.obligations.map((o) => o.kind);
 }

@@ -17,7 +17,6 @@ export type Holder = "main" | "owner" | "gate" | "program";
 export type MemberKind =
   | "decideClaim"
   | "deliver"
-  | "noticeForeignPr"
   | "decideFindings"
   | "fix"
   | "designFix"
@@ -63,7 +62,6 @@ export function memberRules(s: MemberSituation): readonly Spec<MemberKind>[] {
     return out;
   }
 
-  if (s.foreign && !s.foreignNoticed) out.push(spec("noticeForeignPr", "program"));
   if (s.review === "validFailUnadjudicated" || s.accept === "validFailUnadjudicated") out.push(spec("decideFindings", "main"));
 
   const checksFixTrigger = s.checks === "fail" && !s.checksRunFixed;
@@ -145,7 +143,17 @@ export function subjectRules(s: SubjectSituation): readonly Spec<SubjectKind>[] 
 
 export function effectRules(s: EffectSituation): readonly Spec<EffectKind>[] {
   if (s.fulfilled) return [];
-  if (s.conflict) return [spec("decideStall", "main")];
+  switch (s.conflict) {
+    case "undecided":
+      return [spec("decideStall", "main")];
+    case "resolved":
+    case "external":
+      return [];
+    case "none":
+      break;
+    default:
+      return assertNever(s.conflict);
+  }
   switch (s.failure) {
     case "unadjudicated":
       return [spec("decideEffectFailed", "main")];
@@ -159,7 +167,7 @@ export function effectRules(s: EffectSituation): readonly Spec<EffectKind>[] {
   }
 }
 
-export const effectWaiting = (s: EffectSituation): boolean => !s.fulfilled && s.failure === "external";
+export const effectWaiting = (s: EffectSituation): boolean => !s.fulfilled && (s.failure === "external" || s.conflict === "external");
 
 export function seatRules(s: SeatSlotSituation): readonly Spec<SeatKind>[] {
   switch (s.seat) {
@@ -170,6 +178,7 @@ export function seatRules(s: SeatSlotSituation): readonly Spec<SeatKind>[] {
     case "parked":
       return s.needed ? [spec("wake", "main")] : [];
     case "live":
+    case "parkedWoken":
       return [];
     default:
       return assertNever(s.seat);

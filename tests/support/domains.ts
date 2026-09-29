@@ -20,8 +20,6 @@ export const memberDomain: Domain<MemberSituation> = {
   designOnly: bool,
   claim: claims,
   ours: ["none", "maintainable"],
-  foreign: bool,
-  foreignNoticed: bool,
   materialized: ["settled", "pending"],
   review: gateStates,
   accept: gateStates,
@@ -69,10 +67,10 @@ export const subjectDomain: Domain<SubjectSituation> = { decided: ["none", "reso
 export const effectDomain: Domain<EffectSituation> = {
   fulfilled: bool,
   failure: ["none", "unadjudicated", "retry", "external"],
-  conflict: bool,
+  conflict: ["none", "undecided", "resolved", "external"],
 };
 
 export const seatDomain: Domain<SeatSlotSituation> = {
-  seat: ["live", "parked", "pendingAck", "absent"],
+  seat: ["live", "parked", "parkedWoken", "pendingAck", "absent"],
   needed: bool,
 };

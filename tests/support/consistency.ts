@@ -17,10 +17,10 @@ const vfa = (s: MemberSituation): boolean => s.review === "validFailAdjudicated"
 
 export const MEMBER_CONSTRAINTS: readonly Constraint<MemberSituation>[] = [
   {
-    name: "ours=none ⇒ no gate verdict, PR facts unknown, no fix/notice/checks state",
+    name: "ours=none ⇒ no gate verdict, PR facts unknown, no fix/checks state",
     violated: (s) =>
       s.ours === "none" &&
-      (s.review !== "none" || s.accept !== "none" || s.mergeable !== "unknown" || s.checks !== "unknown" || s.foreignNoticed || s.fixDone || s.checksRunFixed || s.checksDecided !== "none"),
+      (s.review !== "none" || s.accept !== "none" || s.mergeable !== "unknown" || s.checks !== "unknown" || s.fixDone || s.checksRunFixed || s.checksDecided !== "none"),
   },
   { name: "ours=none ∧ deliverDone ⇒ materialized=pending", violated: (s) => s.ours === "none" && s.deliverDone && s.materialized === "settled" },
   { name: "checksRunFixed or a checks decision ⇒ checks=fail", violated: (s) => s.checks !== "fail" && (s.checksRunFixed || s.checksDecided !== "none") },
@@ -37,15 +37,13 @@ export const MEMBER_CONSTRAINTS: readonly Constraint<MemberSituation>[] = [
     name: "fixDone on the checksFail trigger ⇒ checksRunFixed",
     violated: (s) => s.fixDone && !s.repairOwner && s.mergeable !== "no" && s.checks === "fail" && !s.checksRunFixed,
   },
-  {
-    name: "checksRunFixed with the checksFail run as the current trigger ⇒ fixDone",
-    violated: (s) => s.checksRunFixed && !s.fixDone && !s.repairOwner && s.mergeable !== "no",
-  },
+  { name: "one submit answers one ticket ⇒ ¬(deliverDone ∧ fixDone)", violated: (s) => s.deliverDone && s.fixDone },
 ];
 
 const verificationLike = <T extends { readonly claim: string; readonly failDecision: string }>(gate: (s: T) => string): Constraint<T>[] => [
   { name: "claims in this context are questions", violated: (s) => s.claim !== "none" && s.claim !== "question" },
-  { name: "gate state is never superseded/validFailAdjudicated (no findings)", violated: (s) => gate(s) === "superseded" || gate(s) === "validFailAdjudicated" },
+  // postMerge and closure verdicts carry no findings; a reverified one is superseded by the slot's next attempt
+  { name: "gate state is never validFailAdjudicated (no findings)", violated: (s) => gate(s) === "validFailAdjudicated" },
   // admission: decide(postMergeFail|closureFail) is only derived for the current valid failing verdict
   { name: "a fail decision ⇒ the verdict is valid and failing", violated: (s) => s.failDecision !== "none" && gate(s) !== "validFailUnadjudicated" },
   { name: "reverify re-pins the attempt ⇒ the reverified verdict is no longer current", violated: (s) => s.failDecision === "reverify" },
@@ -59,9 +57,9 @@ export const CLOSURE_CONSTRAINTS: readonly Constraint<ClosureSituation>[] = [
 ];
 
 // ReconcileSituation (classifyReconcile) over a timeline: the issue's events alternate closed/reopened starting with a
-// close, `open` follows the last event; a decision is written after the event it pins. `afterOutcome` holds the events
-// at or after the outcome time (all events for a pending member); the outcome time of noCode is the latest noCode-type
-// decision (noCode, noCodeClaim, closed, reopened/reopenAccepted), and every closed decision is such a decision.
+// close, `open` follows the last event; a decision is made after the event it pins. `afterOutcome` holds the events
+// at or after the outcome time (all events for a pending member); the outcome time of noCode is the time the state's
+// noCode confirmation was made (unsolicited noCode, a confirmed noCode claim, or confirmedNoCode on a close).
 export const RECONCILE_CONSTRAINTS: readonly Constraint<ReconcileSituation>[] = [
   { name: "reopenUndecided ⇒ no decision on the latest reopen", violated: (s) => s.reopenUndecided && s.reopenDecision !== "none" },
   { name: "closedUndecided ⇒ no decision on the latest close", violated: (s) => s.closedUndecided && s.closedDecision !== "none" },
@@ -83,14 +81,17 @@ export const RECONCILE_CONSTRAINTS: readonly Constraint<ReconcileSituation>[] = 
     violated: (s) => s.outcome === "pending" && s.neverClosedSinceOutcome && (!s.open || s.reopenUndecided || s.reopenDecision !== "none" || s.closedDecision !== "none"),
   },
   {
-    // reopenAccepted is a noCode-type decision after the pinned reopen, so a later confirmation moves the outcome time past it
+    // reopenAccepted clears the confirmation, so noCode again needs a later confirmation, whose time is past that reopen
     name: "noCode ⇒ the latest reopen since the outcome is not decided reopenAccepted",
     violated: (s) => s.outcome === "noCode" && s.reopenDecision === "reopenAccepted",
   },
   {
-    // a closed decision is a noCode-type decision after the latest close, so the outcome time is after every close
-    name: "noCode with a decision on the latest close ⇒ no close since the outcome",
-    violated: (s) => s.outcome === "noCode" && s.closedDecision !== "none" && !s.neverClosedSinceOutcome,
+    // confirmedNoCode confirms noCode at the decision, after the close it pins, with the same body hash; while that close
+    // is the latest, only reopenAccepted on the reopen that follows clears the confirmation, and that leaves the issue open
+    name: "confirmedNoCode on the latest close ⇒ noCode with no close since the outcome, or pending, open and reopenAccepted",
+    violated: (s) =>
+      s.closedDecision === "confirmedNoCode" &&
+      ((s.outcome === "noCode" && !s.neverClosedSinceOutcome) || (s.outcome === "pending" && (!s.open || s.reopenDecision !== "reopenAccepted"))),
   },
 ];
 

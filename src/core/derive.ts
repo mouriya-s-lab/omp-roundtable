@@ -16,14 +16,13 @@ import {
   verificationRules,
   type Holder,
 } from "./rules.ts";
-import type { AgentId, Hash, Host, IssueRef, ObligationId, Policy, PrRef, Sha, Snapshot, StoredRecord } from "./types.ts";
+import type { AgendaState, AgentId, Facts, Hash, Host, IssueRef, ObligationId, PendingClaim, Policy, PrRef, Sha } from "./types.ts";
 
 export type ReplyKind = "prSubmit" | "claim" | "verdict" | "decision";
 
 export type ProgramAction =
   | { readonly kind: "effect"; readonly target: EffectTarget }
   | { readonly kind: "merge"; readonly pr: PrRef; readonly head: Sha }
-  | { readonly kind: "noticeForeignPr"; readonly pr: PrRef; readonly foreign: readonly PrRef[] }
   | { readonly kind: "close" | "reopen"; readonly issue: IssueRef }
   | { readonly kind: "closeParent" | "reopenParent"; readonly issue: IssueRef };
 
@@ -57,13 +56,13 @@ export interface Derived {
   readonly done: boolean;
 }
 
-export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
-  const c = classify(snap, host);
+export function derive(state: AgendaState, facts: Facts, host: Host, policy: Policy): Derived {
+  const c = classify(state, facts, host);
   const out: Obligation[] = [];
   const needed = new Set<string>();
-  const ownersOf = (claim: StoredRecord): { issue: IssueRef; bodyHash: Hash | null }[] =>
-    claim.body.kind === "claim" && claim.body.claim.kind === "question"
-      ? rowOwners(snap, claim.body.claim.context).map((issue) => ({ issue, bodyHash: snap.issues.find((i) => sameIssue(i.ref, issue))?.bodyHash ?? null }))
+  const ownersOf = (claim: PendingClaim): { issue: IssueRef; bodyHash: Hash | null }[] =>
+    claim.claim.kind === "question"
+      ? rowOwners(state, claim.claim.context).map((issue) => ({ issue, bodyHash: facts.issues.find((i) => sameIssue(i.ref, issue))?.bodyHash ?? null }))
       : [];
   const base = (
     id: ObligationId,
@@ -83,7 +82,7 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
     yieldAllowed: false,
     brief: briefFor(
       input,
-      { id, kind, context, requestName: opts.seat?.requestName ?? null, workDir: opts.seat?.workDir ?? null, pin: c.pins.get(id) ?? null, parent: snap.agenda.parent, agenda: snap.agenda.record },
+      { id, kind, context, requestName: opts.seat?.requestName ?? null, workDir: opts.seat?.workDir ?? null, pin: c.pins.get(id) ?? null, parent: state.parent },
       policy,
     ),
   });
@@ -113,10 +112,6 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
           });
           break;
         }
-        case "noticeForeignPr":
-          if (w.ids.noticeForeignPr !== null && w.pr !== null)
-            out.push({ ...base(w.ids.noticeForeignPr, sp.kind, "program", ctx, { kind: "program", what: "noticeForeignPr" }), action: { kind: "noticeForeignPr", pr: w.pr.ref, foreign: w.foreign } });
-          break;
         case "decideFindings":
           if (w.ids.decideFindings !== null && w.unadjudicated !== null)
             out.push(base(w.ids.decideFindings, sp.kind, "main", ctx, { kind: "decideFindings", member: w, verdict: w.unadjudicated }));
@@ -287,14 +282,15 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
     out.push(base(p.id, "spawn", "main", "seat", { kind: "acknowledge", requestName: p.requestName, agent: p.agentId as AgentId, previous: p.previous }));
   }
 
-  // completion filter (core.md §3): drop seat/main obligations that already have a completing record
-  const completedIds = new Set(snap.records.filter((r) => r.obligation !== null && r.body.kind !== "claim").map((r) => r.obligation));
-  const obligations = out.filter((o) => o.holder === "program" || !completedIds.has(o.id));
-
+  // Completion lives in state: an answered ticket's slot changes, so rules no longer produce it (core.md §3 完结).
+  const obligations = out;
   const waiting =
-    (c.member !== null && memberWaiting(c.member.s)) || c.effects.some((e) => effectWaiting(e.s)) || c.stall.external || obligations.some((o) => o.holder === "program");
+    (c.member !== null && memberWaiting(c.member.s)) ||
+    c.effects.some((e) => effectWaiting(e.s)) ||
+    c.stall.decided === "external" ||
+    obligations.some((o) => o.holder === "program");
   const done = c.currentUnit === null && closureDone(c.closure.s);
-  if (!done && obligations.length === 0 && !waiting) {
+  if (!done && obligations.length === 0 && !waiting && c.stall.decided === "none") {
     obligations.push(base(c.stall.id, "decideStall", "main", "agenda", { kind: "stall", classified: c }));
   }
   return { classified: c, obligations, waiting, done };
