@@ -180,7 +180,8 @@ export interface SeatWitness {
   readonly requestName: string;
   readonly holder: AgentId | null;
   readonly pending: AgentId | null;
-  readonly wokenCount: number;
+  /** Parked episode of the current holder (registry `parkedSince`); the wake ticket is pinned to it. */
+  readonly parkedSince: Millis | null;
   readonly spawnId: ObligationId;
   readonly wakeId: ObligationId | null;
 }
@@ -478,18 +479,17 @@ export function verdictFails(v: Verdict): boolean {
 
 // ---------------------------------------------------------------- seats
 
-function seatState(host: Host, snap: Snapshot, name: string): { state: SeatState; holder: AgentId | null; pending: AgentId | null; woken: number } {
+function seatState(host: Host, snap: Snapshot, name: string): { state: SeatState; holder: AgentId | null; pending: AgentId | null; parkedSince: Millis | null } {
   const seated = decisionsOf(snap, "seated").filter((r) => r.body.decision.subject === "seated" && r.body.decision.requestName === name);
   const last = seated.at(-1);
   const holderId = last !== undefined && last.body.decision.subject === "seated" ? last.body.decision.agentId : null;
   const acknowledged = new Set(seated.map((r) => (r.body.decision.subject === "seated" ? r.body.decision.agentId : "")));
   const holder = holderId === null ? undefined : host.agents.find((a) => a.id === holderId);
   const pending = host.agents.find((a) => stripSuffix(a.id) === name && a.status !== "aborted" && !acknowledged.has(a.id));
-  const woken = holderId === null ? 0 : decisionsOf(snap, "woken").filter((r) => r.body.decision.subject === "woken" && r.body.decision.agentId === holderId).length;
-  if (pending !== undefined) return { state: "pendingAck", holder: holderId, pending: pending.id, woken };
-  if (holder !== undefined && holder.status === "live") return { state: "live", holder: holderId, pending: null, woken };
-  if (holder !== undefined && holder.status === "parked") return { state: "parked", holder: holderId, pending: null, woken };
-  return { state: "absent", holder: holderId, pending: null, woken };
+  if (pending !== undefined) return { state: "pendingAck", holder: holderId, pending: pending.id, parkedSince: null };
+  if (holder !== undefined && holder.status === "live") return { state: "live", holder: holderId, pending: null, parkedSince: null };
+  if (holder !== undefined && holder.status === "parked") return { state: "parked", holder: holderId, pending: null, parkedSince: holder.parkedSince };
+  return { state: "absent", holder: holderId, pending: null, parkedSince: null };
 }
 
 function seatWitness(mint: Mint, host: Host, snap: Snapshot, role: SeatRole, issue: IssueRef, name: string): { state: SeatState; w: SeatWitness } {
@@ -502,9 +502,9 @@ function seatWitness(mint: Mint, host: Host, snap: Snapshot, role: SeatRole, iss
       requestName: name,
       holder: st.holder,
       pending: st.pending,
-      wokenCount: st.woken,
+      parkedSince: st.parkedSince,
       spawnId: mint("spawn", "seat", { requestName: name, previous: st.holder }, 1),
-      wakeId: st.holder === null ? null : mint("wake", "seat", { agent: st.holder, count: st.woken }, 1),
+      wakeId: st.holder === null || st.parkedSince === null ? null : mint("wake", "seat", { agent: st.holder, since: st.parkedSince }, 1),
     },
   };
 }
