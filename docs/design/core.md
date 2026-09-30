@@ -242,7 +242,7 @@ gate 槽位的取代（`step` 执行）：
 - **请求名**：
   - owner：`rt-<repoSlug>-<issue>-owner`；
   - gate：`rt-<repoSlug>-<issue>-<kind>-h<pinHash>-a<attempt>`。
-- 请求名只用 `[a-z0-9-]`，长度不超过 44，给 registry 的后缀留出空间。
+- 请求名只用 `[a-z0-9-]`，长度不超过 44。宿主原样用它作 agent id，只在重名时加 `-2` 等后缀，所以去掉后缀就能认回请求名。
 - **工作目录**：`/tmp/omp-roundtable/<owner>-<repo>-<issue>/<请求名>`。续作 owner 会回到同一个工作目录。
 
 ## 4 函数

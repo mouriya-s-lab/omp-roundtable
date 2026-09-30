@@ -23,7 +23,7 @@
 
 | 域 | 固有性质 | 证据 |
 |---|---|---|
-| LLM agent（omp 会话） | 上下文会被 compact，compact 后不保证记得协议；输出是可能出错的主张；子 agent 与主会话同在一个 OS 进程，但隔离派出的子 agent 会重新加载插件模块，得到自己的一份模块实例（非隔离子 agent 复用父会话的模块），所以进程内共享的状态要放在 `globalThis` 的 `Symbol.for` 槽位 | omp 18.4.2 源码：`task/executor.ts` 在进程内运行子 agent；`ctx.agent` 暴露 `{kind,id,name,depth,parentId}`；模块加载见附件 [域证据](omp-roundtable.evidence.md) |
+| LLM agent（omp 会话） | 上下文会被 compact，compact 后不保证记得协议；输出是可能出错的主张；子 agent 与主会话同在一个 OS 进程，但隔离派出的子 agent 会重新加载插件模块，得到自己的一份模块实例（非隔离子 agent 复用父会话的模块），所以进程内共享的状态要放在 `globalThis` 的 `Symbol.for` 槽位 | omp 18.4.4 源码：`task/executor.ts` 在进程内运行子 agent；`ctx.agent` 暴露 `{kind,id,name,depth,parentId}`；模块加载见附件 [域证据](omp-roundtable.evidence.md) |
 | omp 宿主 | 插件工具可以默认隐藏（`defaultInactive`），由插件在各自会话里用 `setActiveTools` 打开；插件能注册 `/` 命令；`context` 钩子在每次模型请求前执行；`tool_call` 钩子能拦截 `yield`；`sendUserMessage` 能在存活会话里启动一轮对话，对 parked 或 aborted 会话无效；插件经包路径拿到宿主的 IRC 总线，以主会话的名义给 parked 子 agent 发消息就会把它唤醒；插件不能自己 spawn 原生子 agent | 附件 [域证据](omp-roundtable.evidence.md) |
 | GitHub | issue、PR、HEAD、合并都在 GitHub 上，并由它维护；所有 agent 共用同一个账号，看作者分不出是谁写的；`mergeable` 可能是 `UNKNOWN`；合并支持 `--match-head-commit`；API 调用有配额（认证用户每小时 5000 次，另有突发限制） | GitHub REST/GraphQL 文档、`gh pr merge --help`、#4 运行中观察到的 403 |
 | 操作员 | 发起一轮交付，决定推进顺序；不在交付过程中被询问 | delivering-issues skill「不停顿」一节 |
