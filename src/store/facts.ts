@@ -57,46 +57,11 @@ export function factsRequest(state: AgendaState): FactsRequest {
   };
 }
 
-/**
- * Row ids of the first markdown table under `## 验收标准` (child) or `## 关闭验证` (parent):
- * `<owner>/<repo>#<issue>/<first-column integer>`. Rows whose first cell is not an integer are not rows.
- */
-export function acceptanceRows(issue: IssueRef, body: string): string[] {
-  const lines = body.replace(/\r\n/g, "\n").split("\n");
-  let inSection = false;
-  let inFence = false;
-  let inTable = false;
-  const rows: string[] = [];
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (line.startsWith("```") || line.startsWith("~~~")) inFence = !inFence;
-    if (inFence) continue;
-    const heading = /^(#{1,6})\s+(.*?)\s*#*$/.exec(line);
-    if (heading !== null) {
-      if (inTable) break;
-      const level = heading[1]?.length ?? 0;
-      if (level === 2 && (heading[2] === "验收标准" || heading[2] === "关闭验证")) inSection = true;
-      else if (inSection && level <= 2) inSection = false;
-      continue;
-    }
-    if (!inSection) continue;
-    if (line.startsWith("|")) {
-      inTable = true;
-      const first = line.slice(1).split("|")[0]?.trim() ?? "";
-      if (/^\d+$/.test(first)) rows.push(`${issue.repo.owner}/${issue.repo.name}#${issue.number}/${Number(first)}`);
-    } else if (inTable) {
-      break;
-    }
-  }
-  return rows;
-}
-
 const issueFact = (raw: IssueRaw): IssueFact => ({
   ref: raw.ref,
   open: raw.open,
   events: raw.events,
   bodyHash: bodyHash(raw.body),
-  acceptanceRows: acceptanceRows(raw.ref, raw.body),
   children: raw.children,
 });
 

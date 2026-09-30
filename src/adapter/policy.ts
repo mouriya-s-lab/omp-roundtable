@@ -40,12 +40,12 @@ function cutAtTag(block: string): string {
   return at === -1 ? block : block.slice(0, at).trimEnd();
 }
 
-export function readPolicy(appendSystemPath: string, systemPrompt: readonly string[]): Policy {
+export function readPolicy(appendSystemPath: string, systemPrompt: readonly string[], seatAgents: Policy["seatAgents"]): Policy {
   let appendSystem = "";
   try {
     appendSystem = readFileSync(appendSystemPath, "utf8");
   } catch (err) {
     if (!(typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT")) throw err;
   }
-  return { appendSystem, systemBlocks: systemBlocks(systemPrompt) };
+  return { appendSystem, systemBlocks: systemBlocks(systemPrompt), seatAgents };
 }

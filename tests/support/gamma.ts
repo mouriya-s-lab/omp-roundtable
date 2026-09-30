@@ -14,7 +14,6 @@ import type {
   DraftId,
   EventId,
   Facts,
-  FindingDecision,
   FindingVerdict,
   GateSlot,
   Hash,
@@ -102,7 +101,6 @@ class Assembly {
       open: true,
       events: [],
       bodyHash: `body-${this.v.name}-${n}` as Hash,
-      acceptanceRows: [`${this.v.repo.owner}/${this.v.repo.name}#${n}/r1`, `${this.v.repo.owner}/${this.v.repo.name}#${n}/r2`],
       children: [],
       ...over,
     };
@@ -181,7 +179,6 @@ class Assembly {
       claims: noise ? [{ id: "noise-claim" as ReplyId, claim: { kind: "noCode", member: other, evidence: "irrelevant" } }, ...this.claims] : this.claims,
       contracts: this.contracts,
       replacements: this.replacements,
-      unrelated: [],
       subjects: this.subjects,
       effectDecisions: [],
       seats: noise ? [{ requestName: "rt-elsewhere-owner", holder: "rt-elsewhere-owner" as AgentId, wokenFor: null }] : [],
@@ -235,7 +232,7 @@ class Assembly {
 const NO_HOST: Host = { agents: [], failures: [] };
 const classifyOf = (a: Assembly, parent: IssueRef | null = null): Classified => classify(a.state(parent), a.facts(), NO_HOST);
 
-function storedVerdict(id: ReplyId, ticket: ObligationId, attempt: number, manifest: Manifest, verdict: Verdict, adjudication: readonly FindingDecision[] | null = null): StoredVerdict {
+function storedVerdict(id: ReplyId, ticket: ObligationId, attempt: number, manifest: Manifest, verdict: Verdict, adjudication: FindingVerdict | null = null): StoredVerdict {
   return { id, ticket, attempt, manifest, verdict, adjudication, failDecision: null };
 }
 
@@ -244,9 +241,12 @@ function storedVerdict(id: ReplyId, ticket: ObligationId, attempt: number, manif
 export function memberGamma(t: MemberSituation, v: Variant): Built {
   const broken = violations(MEMBER_CONSTRAINTS, t);
   if (broken.length > 0) return infeasible(broken.join("; "));
-  const vfa = t.review === "validFailAdjudicated" || t.accept === "validFailAdjudicated";
-  // where the owner repair comes from: an upheld finding, else a checks fixNeeded decision, else an implDefect answer
-  const ownerSource: "verdict" | "implDefect" | "fixNeeded" | null = !t.repairOwner ? null : vfa ? "verdict" : t.checksDecided === "fixNeeded" ? "fixNeeded" : "implDefect";
+  // Each adjudicated failing verdict carries one ruling: the last such gate takes upheld(main) when repairMain holds, the
+  // other takes upheld(owner). An owner repair without a second such gate comes from checks fixNeeded or implDefect.
+  const vfaGates = (["review", "accept"] as const).filter((g) => (g === "review" ? t.review : t.accept) === "validFailAdjudicated");
+  const mainGate = t.repairMain ? (vfaGates.at(-1) ?? null) : null;
+  const ownerViaVerdict = t.repairOwner && vfaGates.some((g) => g !== mainGate);
+  const ownerSource: "verdict" | "implDefect" | "fixNeeded" | null = !t.repairOwner ? null : ownerViaVerdict ? "verdict" : t.checksDecided === "fixNeeded" ? "fixNeeded" : "implDefect";
 
   const a = new Assembly(v);
   a.designOnly = t.designOnly;
@@ -296,23 +296,19 @@ export function memberGamma(t: MemberSituation, v: Variant): Built {
     if (current === null || !("head" in current) || ticket === null) return infeasible("γ: no manifest");
     const manifest: Manifest = state === "stale" ? (v.noise ? { ...current, memberBodyHash: "old-body" as Hash } : { ...current, head: "old-head" as Sha }) : current;
     const pass = state === "validPass" || state === "stale";
-    const verdict: Verdict =
-      gate === "review"
-        ? { gate: "review", observedHead: head, gates: pass ? ["pass", "pass", "pass", "pass", "pass"] : ["fail", "notRun", "notRun", "notRun", "notRun"], findings: pass ? [] : [finding("f1"), finding("f2")] }
-        : { gate: "accept", observedHead: head, rows: [{ rowId: "r1", command: "c", output: "o", pass }, { rowId: "r2", command: "c", output: "o", pass: true }], findings: pass ? [] : [finding("f1"), finding("f2")], unrelated: [] };
+    const verdict: Verdict = { gate, ok: pass, note: pass ? "ok" : "a.ts:1 breaks" };
     const vid = a.replyId();
-    let adjudication: FindingDecision[] | null = null;
-    if (state === "superseded" || state === "validFailAdjudicated") {
-      const f1: FindingVerdict = state === "validFailAdjudicated" && ownerSource === "verdict" ? { kind: "upheld", responsible: "owner" } : { kind: "rejected", basis: "b" };
-      const f2: FindingVerdict = state === "validFailAdjudicated" && t.repairMain ? { kind: "upheld", responsible: "main" } : { kind: "rejected", basis: "b" };
-      adjudication = [
-        { findingId: "f1", verdict: f1 },
-        { findingId: "f2", verdict: f2 },
-      ];
-    }
-    // superseded: the findings were all dismissed, which moved the slot to the next attempt
+    const adjudication: FindingVerdict | null =
+      state === "superseded"
+        ? { kind: "rejected", basis: "b" }
+        : state === "validFailAdjudicated"
+          ? gate === mainGate || !t.repairOwner
+            ? { kind: "upheld", responsible: "main" }
+            : { kind: "upheld", responsible: "owner" }
+          : null;
+    // superseded: the verdict was rejected, which moved the slot to the next attempt
     const slot: GateSlot = { attempt: state === "superseded" ? 2 : 1, verdict: storedVerdict(vid, ticket, 1, manifest, verdict, adjudication) };
-    const rejected = gate === "review" && adjudication !== null ? adjudication.filter((f) => f.verdict.kind === "rejected").map((f) => `${vid}/${f.findingId}`) : [];
+    const rejected = gate === "review" && adjudication?.kind === "rejected" ? [vid] : [];
     setM((m) => (gate === "review" ? { ...m, review: slot, rejectedFindings: [...m.rejectedFindings, ...rejected] } : { ...m, accept: slot }));
   }
   // 3. the fix completed on the current trigger
@@ -331,10 +327,6 @@ export function memberGamma(t: MemberSituation, v: Variant): Built {
   // 5. the target's own pending claim
   if (t.claim !== "none") a.claim(t.claim);
   return a.built();
-}
-
-function finding(id: string): { id: string; location: string; consequence: string; reproduction: string; responsible: "owner" } {
-  return { id, location: "a.ts:1", consequence: "c", reproduction: "r", responsible: "owner" };
 }
 
 // ------------------------------------------------------------------ reconcile: history search
@@ -483,9 +475,8 @@ export function reconcileGamma(h: ReconcileHistory, v: Variant): Built {
     if (unit === undefined) return infeasible("γ: no unit");
     const { manifest } = unitManifest(probe, facts, unit);
     if (manifest.gate !== "postMerge") return infeasible("γ: manifest");
-    const rows = unit.members.flatMap((m) => a.issues.find((i) => i.ref.number === m.issue.number)?.acceptanceRows ?? []).map((rowId) => ({ rowId, command: "c", output: "o", pass: true }));
     const ticket = obligationId("postMerge", `verify:${v.repo.owner}/${v.repo.name}#${v.member}`, manifest, 1);
-    a.units = [{ top: a.m, postMerge: { attempt: 1, verdict: storedVerdict(a.replyId(), ticket, 1, manifest, { gate: "postMerge", observed: manifest.merges, rows, unrelated: [] }) } }];
+    a.units = [{ top: a.m, postMerge: { attempt: 1, verdict: storedVerdict(a.replyId(), ticket, 1, manifest, { gate: "postMerge", ok: true, note: "ok" }) } }];
   }
   return a.built();
 }
@@ -532,7 +523,7 @@ export function verificationGamma(r: VerificationRecipe, v: Variant): Built {
     if (current.gate !== "postMerge") return infeasible("γ: manifest");
     const manifest: Manifest = r.verdict === "stale" ? { ...current, memberBodyHashes: current.memberBodyHashes.map(() => "old" as Hash) } : current;
     const pass = r.verdict !== "fail";
-    const verdict = storedVerdict(a.replyId(), c.w.ids.postMerge, 1, manifest, { gate: "postMerge", observed: current.merges, rows: [{ rowId: "r1", command: "c", output: "o", pass }], unrelated: [] });
+    const verdict = storedVerdict(a.replyId(), c.w.ids.postMerge, 1, manifest, { gate: "postMerge", ok: pass, note: pass ? "ok" : "row 1 fails" });
     if (r.failDecision === "correction") {
       a.drafts.push({
         id: `${verdict.id}#0` as DraftId,
@@ -568,7 +559,7 @@ export function closureGamma(t: ClosureSituation, v: Variant): Built {
   const parent = t.parent === "none" ? null : parentRef;
   if (parent !== null) {
     const children = v.noise ? [a.m, { repo: v.repo, number: v.member + 500 }] : [a.m];
-    a.issues.push(a.issue(parentRef.number, { open: t.parent === "open", children, acceptanceRows: [`${v.repo.owner}/${v.repo.name}#${parentRef.number}/c1`] }));
+    a.issues.push(a.issue(parentRef.number, { open: t.parent === "open", children }));
     // γ2's second child is terminal (merged elsewhere), so it raises no agenda gap
   }
   if (t.closure !== "none") {
@@ -577,8 +568,7 @@ export function closureGamma(t: ClosureSituation, v: Variant): Built {
     if (current === null || current.gate !== "closure" || c.w.ids.closure === null) return infeasible("γ: no closure manifest");
     const manifest: Manifest = t.closure === "stale" ? { ...current, parentBodyHash: "old-parent" as Hash } : current;
     const pass = t.closure !== "validFailUnadjudicated" && t.closure !== "superseded";
-    const rows = [{ rowId: `${v.repo.owner}/${v.repo.name}#${parentRef.number}/c1`, command: "c", output: "o", pass }];
-    const verdict = storedVerdict(a.replyId(), c.w.ids.closure, 1, manifest, { gate: "closure", observed: current.merges, rows });
+    const verdict = storedVerdict(a.replyId(), c.w.ids.closure, 1, manifest, { gate: "closure", ok: pass, note: pass ? "ok" : "c1 fails" });
     a.closure =
       t.closure === "superseded"
         ? { attempt: 2, verdict: { ...verdict, failDecision: "reverify" } }

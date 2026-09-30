@@ -56,8 +56,6 @@ export interface IssueFact {
   /** Chronological close/reopen events. */
   readonly events: readonly LifecycleEvent[];
   readonly bodyHash: Hash;
-  /** Row ids parsed from the issue's acceptance table (or the parent's closure table). */
-  readonly acceptanceRows: readonly string[];
   readonly children: readonly IssueRef[];
 }
 
@@ -148,58 +146,22 @@ export type Claim =
   | { readonly kind: "split"; readonly member: IssueRef; readonly proposal: string }
   | { readonly kind: "blocked"; readonly member: IssueRef; readonly category: string; readonly attempts: string };
 
-export type GateStatus = "pass" | "fail" | "notRun";
-
-export interface Finding {
-  readonly id: string;
-  readonly location: string;
-  readonly consequence: string;
-  readonly reproduction: string;
-  readonly responsible: "owner" | "main";
-}
-
-export interface RowResult {
-  readonly rowId: string;
-  readonly command: string;
-  readonly output: string;
-  readonly pass: boolean;
-}
-
-export interface UnrelatedFailure {
-  readonly description: string;
-  readonly reproduction: string;
-}
-
 export interface Observed {
   readonly repo: RepoRef;
   readonly commit: Sha;
 }
 
-export type Verdict =
-  | {
-      readonly gate: "review";
-      readonly observedHead: Sha;
-      readonly gates: readonly [GateStatus, GateStatus, GateStatus, GateStatus, GateStatus];
-      readonly findings: readonly Finding[];
-    }
-  | {
-      readonly gate: "accept";
-      readonly observedHead: Sha;
-      readonly rows: readonly RowResult[];
-      readonly findings: readonly Finding[];
-      readonly unrelated: readonly UnrelatedFailure[];
-    }
-  | {
-      readonly gate: "postMerge";
-      readonly observed: readonly Observed[];
-      readonly rows: readonly RowResult[];
-      readonly unrelated: readonly UnrelatedFailure[];
-    }
-  | {
-      readonly gate: "closure";
-      readonly observed: readonly Observed[];
-      readonly rows: readonly RowResult[];
-    };
+export type GateKind = "review" | "accept" | "postMerge" | "closure";
+
+/**
+ * A gate seat's judgement: ok or not ok, and its words (the reason when not ok). Everything factual — the head, the
+ * acceptance rows, the observed commits — is the ticket's pin, stamped by the program (core.md §3 有效性).
+ */
+export interface Verdict {
+  readonly gate: GateKind;
+  readonly ok: boolean;
+  readonly note: string;
+}
 
 export type FindingVerdict =
   | { readonly kind: "upheld"; readonly responsible: "owner" | "main" }
@@ -207,11 +169,6 @@ export type FindingVerdict =
   | { readonly kind: "outOfScope"; readonly draft: Draft }
   | { readonly kind: "designGap"; readonly route: Route }
   | { readonly kind: "acceptanceMethod" };
-
-export interface FindingDecision {
-  readonly findingId: string;
-  readonly verdict: FindingVerdict;
-}
 
 /** Decision variants per subject: docs/design/core.briefs.md "Decision 变体". */
 export type Decision =
@@ -231,12 +188,11 @@ export type Decision =
       readonly verdict: "confirmed" | "refuted";
     }
   | { readonly subject: "blockedClaim"; readonly claim: ReplyId; readonly verdict: "replacePr" | "external" | "refuted" }
-  | { readonly subject: "findings"; readonly verdictId: ReplyId; readonly perFinding: readonly FindingDecision[] }
+  | { readonly subject: "findings"; readonly verdictId: ReplyId; readonly verdict: FindingVerdict }
   | { readonly subject: "closed"; readonly member: IssueRef; readonly event: EventId; readonly bodyHash: Hash; readonly verdict: "confirmedNoCode" | "reopen" }
   | { readonly subject: "reopened"; readonly member: IssueRef; readonly event: EventId; readonly verdict: "restore" | "correction" | "reopenAccepted" }
   | { readonly subject: "checks"; readonly pr: PrRef; readonly runId: string; readonly verdict: "rerun" | "fixNeeded" | "external" }
   | { readonly subject: "postMergeFail" | "closureFail"; readonly verdictId: ReplyId; readonly verdict: "correction" | "reverify" }
-  | { readonly subject: "unrelated"; readonly verdictId: ReplyId }
   | { readonly subject: "orphanDesign" | "migration" | "agendaGap" | "stall"; readonly key: Hash; readonly verdict: "resolved" | "external" }
   | { readonly subject: "effectFailed"; readonly effect: ObligationId; readonly failedAt: Millis; readonly verdict: "retry" | "external" }
   | { readonly subject: "designFix"; readonly verdictId: ReplyId; readonly commit: Sha }
@@ -313,7 +269,8 @@ export interface StoredVerdict {
   readonly attempt: number;
   readonly manifest: Manifest;
   readonly verdict: Verdict;
-  readonly adjudication: readonly FindingDecision[] | null;
+  /** The main session's ruling on this verdict when it is not ok. */
+  readonly adjudication: FindingVerdict | null;
   /** postMerge / closure only. */
   readonly failDecision: "correction" | "reverify" | null;
 }
@@ -358,7 +315,7 @@ export interface MemberState {
   readonly replaced: readonly PrRef[];
   readonly review: GateSlot;
   readonly accept: GateSlot;
-  /** `<verdict id>/<finding id>` of review findings adjudicated `rejected`. */
+  /** Ids of not-ok review verdicts the main session adjudicated `rejected`. */
   readonly rejectedFindings: readonly string[];
   /** Open repair items from decisions, with the decision's rationale for the fix brief; cleared by the next `PrSubmit`. */
   readonly implDefect: Repair | null;
@@ -405,7 +362,6 @@ export interface AgendaState {
   readonly claims: readonly PendingClaim[];
   readonly contracts: readonly ContractDecision[];
   readonly replacements: readonly ReplacementState[];
-  readonly unrelated: readonly { readonly verdictId: ReplyId; readonly failures: readonly UnrelatedFailure[] }[];
   readonly subjects: readonly SubjectDecision[];
   readonly effectDecisions: readonly { readonly effect: ObligationId; readonly failedAt: Millis; readonly verdict: "retry" | "external" }[];
   readonly seats: readonly SeatRecord[];
@@ -432,9 +388,12 @@ export interface EffectFailure {
   readonly error: string;
 }
 
+/** What realize takes from outside the agenda: policy text for briefs and the agent types seats are spawned as. */
 export interface Policy {
   readonly appendSystem: string;
   readonly systemBlocks: string;
+  /** Native `task` agent types: owner seats (default task:high) and gate seats (default task:mid). */
+  readonly seatAgents: { readonly owner: string; readonly gate: string };
 }
 
 export interface Host {

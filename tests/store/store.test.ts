@@ -10,7 +10,7 @@ import { createStore, FakeGitHub, type Store } from "../../src/store/index.ts";
 import { factsQuery } from "../../src/store/gh.ts";
 
 const repo = { owner: "lab", name: "sandbox" };
-const policy: Policy = { appendSystem: "A", systemBlocks: "B" };
+const policy: Policy = { appendSystem: "A", systemBlocks: "B", seatAgents: { owner: "task:high", gate: "task:mid" } };
 const NO_HOST: Host = { agents: [], failures: [] };
 const sha = (c: string): Sha => c.repeat(40).slice(0, 40) as Sha;
 

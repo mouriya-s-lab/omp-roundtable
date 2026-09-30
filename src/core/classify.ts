@@ -40,7 +40,6 @@ import type {
   Sha,
   StoredVerdict,
   SubmitState,
-  UnrelatedFailure,
   Verdict,
 } from "./types.ts";
 
@@ -143,7 +142,6 @@ export interface ClosureWitness {
 }
 
 export type SubjectWitness =
-  | { readonly subject: "unrelated"; readonly verdictId: ReplyId; readonly failures: readonly UnrelatedFailure[]; readonly id: ObligationId }
   | { readonly subject: "orphanDesign"; readonly commit: Sha; readonly key: Hash; readonly id: ObligationId }
   | { readonly subject: "migration"; readonly decision: ReplyId; readonly migration: IssueRef; readonly key: Hash; readonly id: ObligationId }
   | { readonly subject: "agendaGap"; readonly child: IssueRef; readonly key: Hash; readonly id: ObligationId };
@@ -376,18 +374,7 @@ function strandedDesignCommits(state: AgendaState, facts: Facts, units: readonly
 
 const manifestKey = (m: Manifest): string => canonical(m);
 
-export function verdictFails(v: Verdict): boolean {
-  switch (v.gate) {
-    case "review":
-      return v.gates.some((g) => g !== "pass");
-    case "accept":
-    case "postMerge":
-    case "closure":
-      return v.rows.some((r) => !r.pass) || v.rows.length === 0;
-    default:
-      return assertNever(v);
-  }
-}
+export const verdictFails = (v: Verdict): boolean => !v.ok;
 
 /** Validity of a slot's verdict against the current pin and attempt (core.md §3 有效性、尝试身份). */
 function evaluateSlot(slot: GateSlot, currentFor: (v: StoredVerdict) => Manifest | null): GateState {
@@ -400,8 +387,7 @@ function evaluateSlot(slot: GateSlot, currentFor: (v: StoredVerdict) => Manifest
   return v.adjudication === null ? "validFailUnadjudicated" : "validFailAdjudicated";
 }
 
-const upheld = (v: StoredVerdict | null, who: "owner" | "main"): boolean =>
-  v !== null && v.adjudication !== null && v.adjudication.some((f) => f.verdict.kind === "upheld" && f.verdict.responsible === who);
+const upheld = (v: StoredVerdict | null, who: "owner" | "main"): boolean => v !== null && v.adjudication !== null && v.adjudication.kind === "upheld" && v.adjudication.responsible === who;
 
 // ---------------------------------------------------------------- seats
 
@@ -657,7 +643,7 @@ function classifyMember(
       memberBodyHash: bodyHash,
       contractDecisions: contract.ids,
       designCommits: contract.commits,
-      rejectedFindings: ms.rejectedFindings.filter((f) => own === null || !f.startsWith(`${own}/`)),
+      rejectedFindings: ms.rejectedFindings.filter((f) => own === null || f !== own),
     });
     acceptManifest = { gate: "accept", head: pr.head, target: pr.target, memberBodyHash: bodyHash, contractDecisions: contract.ids, designCommits: contract.commits };
     reviewManifest = reviewFor(null);
@@ -909,9 +895,6 @@ function classifySubjects(mint: Mint, state: AgendaState, facts: Facts, units: r
   const keyed = (subject: "orphanDesign" | "migration" | "agendaGap", key: Hash): SubjectSituation => ({
     decided: state.subjects.find((d) => d.subject === subject && d.key === key)?.verdict ?? "none",
   });
-  for (const u of state.unrelated) {
-    out.push({ s: { decided: "none" }, w: { subject: "unrelated", verdictId: u.verdictId, failures: u.failures, id: mint("decideUnrelated", "agenda", u.verdictId, 1) } });
-  }
   const entries = units.flatMap((u) => u.members);
   const carrierGone = (carrier: IssueRef | null): boolean => {
     if (carrier === null) return true;

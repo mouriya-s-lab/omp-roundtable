@@ -22,7 +22,7 @@ export type BriefInput =
   | { readonly kind: "decideSubject"; readonly subject: SubjectWitness }
   | { readonly kind: "decideEffectFailed" | "decideEffectConflict"; readonly effect: EffectWitness }
   | { readonly kind: "report"; readonly units: readonly Unit[] }
-  | { readonly kind: "spawn"; readonly seat: SeatWitness; readonly acknowledgeOnly: boolean; readonly pending: AgentId | null; readonly assignment: string | null }
+  | { readonly kind: "spawn"; readonly seat: SeatWitness; readonly acknowledgeOnly: boolean; readonly pending: AgentId | null; readonly agent: string | null; readonly assignment: string | null }
   | { readonly kind: "acknowledge"; readonly requestName: string; readonly agent: AgentId; readonly previous: AgentId | null }
   | { readonly kind: "wake"; readonly seat: SeatWitness; readonly agent: AgentId }
   | { readonly kind: "stall"; readonly classified: Classified }
@@ -100,6 +100,9 @@ function readingList(m: MemberWitness, ident: BriefIdentity): string {
 const ROUTES =
   "设计路线：defaultFirst 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒就改选其他路线；withPr 的 commit 在设计分支上，由发现或提问所在的成员合入；future 需要同 repo 的后续承载者，没有就附设计承接项的草稿。";
 
+const VERDICT_COMPLETION =
+  "用端口回复 `verdict`：`ok` 为 true 或 false，`note` 写理由（不通过时写清问题、位置与复现方式）。head、验收行与观察到的提交由程序按票据的 pin 盖入，不用填写。";
+
 function replyFact(label: string, id: string, payload: unknown): string {
   return `- ${label} ${id}：${canonical(payload)}`;
 }
@@ -156,14 +159,14 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       const m = input.member;
       return seatBrief(
         ident,
-        "用端口回复 `Verdict(review)`：观察到的 head、Gate 1–5 各自状态、每个发现的 file:line、后果、复现命令、责任人。",
+        VERDICT_COMPLETION,
         [
           readingList(m, ident),
           [
             "## 做法",
             `- PR ${m.pr === null ? "?" : prUrl(m.pr.ref)}，HEAD ${m.pr?.head ?? "?"}，base ${m.entry.target.base}。在工作目录里干净 detached checkout 该 HEAD 并确认；HEAD 变化就停下回复。`,
             "- 先读 `skill://review-pr`，依次跑 Gate 1–5，首个失败即停；以 issue 契约为准，不扩大范围；不派审查子代理。",
-            "- 此前被驳回、且没有新证据的发现不再提出。落在主会话 commit 上的发现，责任人写 main。",
+            "- 此前被驳回、且没有新证据的问题不再提出。问题落在主会话的 commit 上时，在 note 里写明。",
           ].join("\n"),
         ],
         policy,
@@ -173,7 +176,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       const m = input.member;
       return seatBrief(
         ident,
-        "用端口回复 `Verdict(accept)`：观察到的 head、每条验收行 id 的命令、输出与判定、未覆盖项、无关失败。",
+        `${VERDICT_COMPLETION} ok 表示每一条验收行都通过。`,
         [
           readingList(m, ident),
           [
@@ -190,7 +193,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       const merges = v.manifest.gate === "postMerge" ? v.manifest.merges.map((o) => `${o.repo.owner}/${o.repo.name}@${o.commit}`).join(", ") : "";
       return seatBrief(
         ident,
-        "用端口回复 `Verdict(postMerge)`：每个 repo 观察到的提交、每条验收行的命令、输出与判定、无关失败（写明为什么无关）。",
+        `${VERDICT_COMPLETION} ok 表示覆盖成员的每一条验收行都通过；与本次无关的失败写在 note 里并写明为什么无关。`,
         [
           [
             "## 必读",
@@ -211,7 +214,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
     case "closure":
       return seatBrief(
         ident,
-        "用端口回复 `Verdict(closure)`：每个 repo 观察到的提交、parent 关闭验证逐行结果。",
+        `${VERDICT_COMPLETION} ok 表示 parent 关闭验证的每一行都通过。`,
         [
           [
             "## 做法",
@@ -253,13 +256,13 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
     case "decideFindings":
       return mainBrief(
         ident,
-        "裁定 gate 发现",
+        "裁定 gate 的不通过结论",
         [replyFact("结论", input.verdict.id, input.verdict.verdict), memberFacts(input.member)].join("\n"),
         [
-          "对每个发现分别裁定：",
+          "对这条结论给出一个裁定：",
           "- upheld(owner)：owner 得到修复票据；upheld(main)：你得到 designFix 票据，在设计分支上修复。",
-          "- rejected(依据)：发现作废；这条结论的发现全部为 rejected 或 outOfScope 时，该 gate 以新的 attempt 重新执行，review 清单会带上被驳回的发现。",
-          "- outOfScope(附草稿)：发现移出本 PR，草稿由程序建成新 issue。",
+          "- rejected(依据)：结论作废，该 gate 以新的 attempt 重新执行，review 清单会带上这条被驳回的结论。",
+          "- outOfScope(附草稿)：问题移出本 PR，草稿由程序建成新 issue；该 gate 以新的 attempt 重新执行。",
           `- designGap(route)：改变契约，已有结论失效、gate 重新执行。${ROUTES}`,
           `- acceptanceMethod：改变契约，须附对成员验收行的正文替换，基准为当前正文哈希 ${input.member.issue?.bodyHash ?? "?"}；gate 重新执行。`,
         ].join("\n"),
@@ -324,13 +327,8 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       return mainBrief(
         ident,
         `裁定 ${input.subject.subject}`,
-        input.subject.subject === "unrelated" ? replyFact("结论", input.subject.verdictId, input.subject.failures) : `- ${canonical(input.subject)}`,
-        input.subject.subject === "unrelated"
-          ? "- 附草稿（锚点「不进议程」）：把无关失败建成新 issue；它不阻塞当前单元。"
-          : [
-              "- resolved(附草稿或插入)：补上缺失的承载者、迁移或议程项。",
-              "- external：进入等待集合，须立即报告操作员。",
-            ].join("\n"),
+        `- ${canonical(input.subject)}`,
+        ["- resolved(附草稿或插入)：补上缺失的承载者、迁移或议程项。", "- external：进入等待集合，须立即报告操作员。"].join("\n"),
       );
     case "decideEffectFailed":
       return mainBrief(
@@ -364,7 +362,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
             "派出席位",
             `请求名 ${input.seat.requestName}（${input.seat.role}），成员 ${issueUrl(input.seat.issue)}`,
             [
-              "先执行、再回执：用原生 `task` 派出；参数 agent 为 owner→task:high、其他→task:mid；isolated: true；name 取请求名；assignment 取下面的简报原文。",
+              `先执行、再回执：用原生 \`task\` 派出；参数 agent 为 ${input.agent ?? "?"}；isolated: true；name 取请求名；assignment 取下面的简报原文。`,
               "前提：宿主设置 async.enabled 为真，并且该 agent 类型没有声明 blocking: true。",
               "派出后回复 Decision(seated{agentId})，agentId 取 task 返回的实际 id。",
               input.assignment === null ? "" : `\n---\n${input.assignment}`,
