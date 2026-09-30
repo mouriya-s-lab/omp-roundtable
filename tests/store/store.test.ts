@@ -180,6 +180,50 @@ describe("effect source checks", () => {
     expect(a).toEqual(b);
   });
 });
+describe("facts links and registered PRs", () => {
+  test("merges one unregistered PR link across two requested issues", async () => {
+    const first = gh.seedIssue(repo, "first", "first body");
+    const second = gh.seedIssue(repo, "second", "second body");
+    const head = sha("l");
+    gh.setBranch(repo, "feature-links", head);
+    const body = `Closes ${repo.owner}/${repo.name}#${first.number}\nCloses ${repo.owner}/${repo.name}#${second.number}`;
+    const pr = await gh.createPr({ repo, base: "main", head: "feature-links", title: "close both", body });
+    const state = convene("ag-links" as AgendaId, gh.now(), null, [
+      { issue: first, target: { repo, base: "main" }, designOnly: false, adoptPr: null },
+      { issue: second, target: { repo, base: "main" }, designOnly: false, adoptPr: null },
+    ]);
+
+    const facts = unwrap(await store.facts(state));
+
+    expect(facts.links).toEqual([{ ref: pr, state: { kind: "open" }, headBranch: "feature-links", head, target: { repo, base: "main" }, closes: [first, second] }]);
+  });
+
+  test("keeps full fields for a registered PR that closes a requested issue", async () => {
+    const issue = gh.seedIssue(repo, "requested", "requested body");
+    const head = sha("r");
+    gh.setBranch(repo, "feature-registered", head);
+    const body = `Closes ${repo.owner}/${repo.name}#${issue.number}`;
+    const pr = await gh.createPr({ repo, base: "main", head: "feature-registered", title: "close requested", body });
+    const state = convene("ag-registered" as AgendaId, gh.now(), null, [{ issue, target: { repo, base: "main" }, designOnly: false, adoptPr: pr }]);
+
+    const facts = unwrap(await store.facts(state));
+
+    expect(facts.prs).toEqual([
+      {
+        ref: pr,
+        state: { kind: "open" },
+        headBranch: "feature-registered",
+        head,
+        target: { repo, base: "main" },
+        closes: [issue],
+        bodyHash: bodyHash(body),
+        mergeable: "unknown",
+        checks: { state: "pending", failedRunId: null },
+      },
+    ]);
+  });
+});
+
 
 describe("gh facts query", () => {
   test("one GraphQL document carries every issue, the parent tree, PRs, branch and default heads", () => {

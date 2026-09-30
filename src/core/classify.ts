@@ -321,9 +321,16 @@ export function rowOwners(state: AgendaState, context: Context): IssueRef[] {
 
 // ---------------------------------------------------------------- outcomes and contracts
 
+/** The member's delivering merge: the latest merged PR that closes it (ties: the lower PR ref, so the choice never depends on read order). */
 function mergedPrFor(state: AgendaState, facts: Facts, member: IssueRef): PrLink | null {
-  const merged = allPrs(facts).filter((p) => p.state.kind === "merged" && closesOf(state, p).some((c) => sameIssue(c, member)));
-  return merged.at(-1) ?? null;
+  let best: PrLink | null = null;
+  for (const p of allPrs(facts)) {
+    if (p.state.kind !== "merged" || !closesOf(state, p).some((c) => sameIssue(c, member))) continue;
+    const at = p.state.mergedAt;
+    const bestAt = best !== null && best.state.kind === "merged" ? best.state.mergedAt : -1;
+    if (best === null || at > bestAt || (at === bestAt && canonical(p.ref) < canonical(best.ref))) best = p;
+  }
+  return best;
 }
 
 const noCodeValid = (state: AgendaState, facts: Facts, ref: IssueRef): boolean => {
@@ -762,7 +769,8 @@ function mergesOf(state: AgendaState, facts: Facts, entries: readonly Entry[]): 
   for (const m of entries) {
     const pr = mergedPrFor(state, facts, m.issue);
     if (pr !== null && pr.state.kind === "merged") {
-      merges.push({ repo: pr.ref.repo, commit: pr.state.mergeSha });
+      const commit = pr.state.mergeSha;
+      if (!merges.some((o) => sameRepo(o.repo, pr.ref.repo) && o.commit === commit)) merges.push({ repo: pr.ref.repo, commit });
       latestAt = Math.max(latestAt, pr.state.mergedAt);
     }
   }

@@ -542,6 +542,8 @@ function preconditions(state: AgendaState, facts: Facts, c: Classified, reply: R
         const pendingAck = c.pendingAcks.find((p) => p.agentId === d.agentId);
         if (seat?.w.pending !== d.agentId && pendingAck === undefined) return "该 agent 不是待回执的 agent（须在 registry 中、非 aborted、请求名匹配、不是已记录的持有者）。";
       }
+      const claimFailure = claimBinding(state, facts, d);
+      if (claimFailure !== null) return claimFailure;
       if (d.subject === "reopened" && d.verdict === "reopenAccepted") {
         const entry = c.currentUnit?.members.find((m) => sameIssue(m.issue, d.member));
         if (entry === undefined || outcomeOf(state, facts, entry).kind !== "noCode") return "reopenAccepted 只适用于结局为 noCode 的成员；已合并的成员请选 restore 或 correction。";
@@ -591,6 +593,27 @@ function routeIssue(facts: Facts, c: Classified, route: Route): string | null {
     default:
       return assertNever(route);
   }
+}
+
+/**
+ * A claim decision must match the claim it answers: the subject names the claim's kind; noCode and split name the
+ * claim's member and its current body hash (the confirmation is pinned to it); `implDefect` needs an owner to repair,
+ * so only a member-context question can take it.
+ */
+function claimBinding(state: AgendaState, facts: Facts, d: Decision): string | null {
+  if (d.subject !== "question" && d.subject !== "noCodeClaim" && d.subject !== "splitClaim" && d.subject !== "blockedClaim") return null;
+  const claim = state.claims.find((x) => x.id === d.claim)?.claim;
+  if (claim === undefined) return "Decision 指向的主张不在未决列表里。";
+  const kind = { question: "question", noCodeClaim: "noCode", splitClaim: "split", blockedClaim: "blocked" }[d.subject];
+  if (claim.kind !== kind) return `主张 ${d.claim} 是 ${claim.kind}，不能用 subject ${d.subject} 裁定。`;
+  if (d.subject === "question" && d.verdict.kind === "implDefect" && (claim.kind !== "question" || claim.context.kind !== "member"))
+    return "implDefect 只适用于成员 context 的问题；验收席位的问题请选 answered、outOfDomain、designGap 或 acceptanceMethod。";
+  if (d.subject === "noCodeClaim" || d.subject === "splitClaim") {
+    if (claim.kind === "question" || !sameIssue(claim.member, d.member)) return `Decision 的 member 不是主张 ${d.claim} 所指的成员。`;
+    const current = facts.issues.find((i) => sameIssue(i.ref, d.member))?.bodyHash ?? null;
+    if (current !== d.bodyHash) return `bodyHash 不是 ${issueKey(d.member)} 的当前正文哈希${current === null ? "" : `（当前为 ${current}）`}。`;
+  }
+  return null;
 }
 
 /** Context of the pending question a `claim(question)` decision answers (null when it is not a pending question). */

@@ -300,16 +300,25 @@ export class GhGitHub implements GitHub {
       .map(prRaw);
   }
 
+  /** Newest first; pages until an issue older than `since` appears or the connection ends, so none is silently cut off. */
   async issuesCreatedSince(repo: RepoRef, since: Millis): Promise<readonly CreatedIssue[]> {
-    const data = await this.graphql(
-      `query { r: repository(${repoArgs(repo)}) { issues(filterBy: { since: ${JSON.stringify(new Date(since).toISOString())} }, first: 100, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { number repository { nameWithOwner } title body createdAt } } } }`,
-    );
-    return nodes(object(data.r, "repository").issues, "issues", "none")
-      .map((value) => {
+    const out: CreatedIssue[] = [];
+    let after: string | null = null;
+    for (;;) {
+      const page = `first: 100${after === null ? "" : `, after: ${JSON.stringify(after)}`}`;
+      const data = await this.graphql(
+        `query { r: repository(${repoArgs(repo)}) { issues(filterBy: { since: ${JSON.stringify(new Date(since).toISOString())} }, ${page}, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { number repository { nameWithOwner } title body createdAt } pageInfo { hasNextPage endCursor } } } }`,
+      );
+      const conn = object(object(data.r, "repository").issues, "issues");
+      const batch = nodes(conn, "issues", "none").map((value) => {
         const n = object(value, "issue");
         return { ref: refOf(n, "issue"), title: text(n.title, "issue.title"), body: text(n.body, "issue.body"), createdAt: timestamp(n.createdAt, "issue.createdAt") };
-      })
-      .filter((i) => i.createdAt >= since);
+      });
+      out.push(...batch.filter((i) => i.createdAt >= since));
+      const info = object(conn.pageInfo, "issues.pageInfo");
+      if (info.hasNextPage !== true || batch.some((i) => i.createdAt < since)) return out;
+      after = text(info.endCursor, "issues.pageInfo.endCursor");
+    }
   }
 
   async createIssue(repo: RepoRef, title: string, body: string): Promise<IssueRef> {

@@ -68,6 +68,9 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
     claim.claim.kind === "question"
       ? rowOwners(state, claim.claim.context).map((issue) => ({ issue, bodyHash: facts.issues.find((i) => sameIssue(i.ref, issue))?.bodyHash ?? null }))
       : [];
+  // body hash of the member a noCode or split claim names: its decision is pinned to it
+  const claimBodyHash = ({ claim }: PendingClaim): Hash | null =>
+    claim.kind === "noCode" || claim.kind === "split" ? (facts.issues.find((i) => sameIssue(i.ref, claim.member))?.bodyHash ?? null) : null;
   const base = (
     id: ObligationId,
     kind: string,
@@ -98,7 +101,8 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
     for (const sp of memberRules(s)) {
       switch (sp.kind) {
         case "decideClaim":
-          if (w.ids.decideClaim !== null && w.claim !== null) out.push(base(w.ids.decideClaim, "decideClaim", "main", ctx, { kind: "decideClaim", member: w, claim: w.claim }));
+          if (w.ids.decideClaim !== null && w.claim !== null)
+            out.push(base(w.ids.decideClaim, "decideClaim", "main", ctx, { kind: "decideClaim", member: w, claim: w.claim, claimBodyHash: claimBodyHash(w.claim) }));
           break;
         case "deliver":
         case "fix": {
@@ -125,7 +129,8 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
             out.push(base(w.ids.designFix, sp.kind, "main", ctx, { kind: "designFix", member: w, verdict: w.designFixVerdict }));
           break;
         case "decideChecks":
-          if (w.ids.decideChecks !== null) out.push(base(w.ids.decideChecks, sp.kind, "main", ctx, { kind: "decideChecks", member: w }));
+          if (w.ids.decideChecks !== null && w.pr !== null && w.failedRun !== null)
+            out.push(base(w.ids.decideChecks, sp.kind, "main", ctx, { kind: "decideChecks", member: w, pr: w.pr.ref, runId: w.failedRun }));
           break;
         case "review":
         case "accept": {
@@ -157,11 +162,13 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
           out.push({ ...base(sp.kind === "close" ? w.ids.close : w.ids.reopen, sp.kind, "program", ctx, { kind: "program", what: sp.kind }), action: { kind: sp.kind, issue: w.member } });
           break;
         case "decideReopened":
-        case "decideClosed": {
-          const id = sp.kind === "decideReopened" ? w.ids.decideReopened : w.ids.decideClosed;
-          if (id !== null) out.push(base(id, sp.kind, "main", ctx, { kind: sp.kind, reconcile: w }));
+          if (w.ids.decideReopened !== null && w.eventForDecision !== null)
+            out.push(base(w.ids.decideReopened, sp.kind, "main", ctx, { kind: "decideReopened", reconcile: w, event: w.eventForDecision }));
           break;
-        }
+        case "decideClosed":
+          if (w.ids.decideClosed !== null && w.eventForDecision !== null && w.bodyHash !== null)
+            out.push(base(w.ids.decideClosed, sp.kind, "main", ctx, { kind: "decideClosed", reconcile: w, event: w.eventForDecision, bodyHash: w.bodyHash }));
+          break;
         default:
           assertNever(sp.kind);
       }
@@ -175,7 +182,8 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
     for (const sp of verificationRules(s)) {
       switch (sp.kind) {
         case "decideClaim":
-          if (w.ids.decideClaim !== null && w.claim !== null) out.push(base(w.ids.decideClaim, sp.kind, "main", ctx, { kind: "decideVerificationClaim", claim: w.claim, rowOwners: ownersOf(w.claim) }));
+          if (w.ids.decideClaim !== null && w.claim !== null)
+            out.push(base(w.ids.decideClaim, sp.kind, "main", ctx, { kind: "decideVerificationClaim", claim: w.claim, claimBodyHash: claimBodyHash(w.claim), rowOwners: ownersOf(w.claim) }));
           break;
         case "postMerge":
           needed.add(w.name);
@@ -202,7 +210,8 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
     for (const sp of closureRules(s)) {
       switch (sp.kind) {
         case "decideClaim":
-          if (w.ids.decideClaim !== null && w.claim !== null) out.push(base(w.ids.decideClaim, sp.kind, "main", "closure", { kind: "decideVerificationClaim", claim: w.claim, rowOwners: ownersOf(w.claim) }));
+          if (w.ids.decideClaim !== null && w.claim !== null)
+            out.push(base(w.ids.decideClaim, sp.kind, "main", "closure", { kind: "decideVerificationClaim", claim: w.claim, claimBodyHash: claimBodyHash(w.claim), rowOwners: ownersOf(w.claim) }));
           break;
         case "closure":
           if (w.ids.closure !== null && w.name !== null && w.parent !== null) {
@@ -251,7 +260,7 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
           out.push({ ...base(w.id, `effect:${w.target.kind}`, "program", "agenda", { kind: "program", what: w.target.kind }), action: { kind: "effect", target: w.target } });
           break;
         case "decideEffectFailed":
-          if (w.failedId !== null) out.push(base(w.failedId, sp.kind, "main", "agenda", { kind: "decideEffectFailed", effect: w }));
+          if (w.failedId !== null && w.failure !== null) out.push(base(w.failedId, sp.kind, "main", "agenda", { kind: "decideEffectFailed", effect: w, failure: w.failure }));
           break;
         case "decideStall":
           out.push(base(w.conflictId, sp.kind, "main", "agenda", { kind: "decideEffectConflict", effect: w }));

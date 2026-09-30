@@ -159,7 +159,7 @@ export class FakeGitHub implements GitHub {
   }
   async issuesCreatedSince(repo: RepoRef, since: Millis): Promise<readonly CreatedIssue[]> {
     this.tick("issuesCreatedSince");
-    return [...this.issues.values()].filter((i) => repoKey(i.ref.repo) === repoKey(repo) && i.createdAt >= since).map((i) => ({ ref: i.ref, title: i.title, body: i.body, createdAt: i.createdAt }));
+    return [...this.issues.values()].filter((i) => repoKey(i.ref.repo) === repoKey(repo) && i.createdAt >= since).map((i) => ({ ref: i.ref, title: i.title, body: i.body, createdAt: i.createdAt })).sort((a, b) => b.createdAt - a.createdAt);
   }
 
   // ------------------------------------------------------------ writes
