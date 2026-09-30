@@ -158,7 +158,7 @@ flowchart LR
   - 每个效应都靠标记或前提实现幂等：store 执行前先读源头，效果已经存在就视为完成；正文替换的基准哈希不符时，不写入。
   - 执行结果不回写到存储。成功与否作为宿主观察 `execution` 交给下一轮推导；失败由 core 转成主会话的 `decide(effectFailed)` 票据，不静默重试。
 - **C4 票据**（core → seat adapter）：
-  - 每张席位票据都带着请求名、席位请求（`task:high` 或 `task:mid`、`isolated: true`、请求名、简报）与简报。
+  - 每张席位票据都带着请求名、席位请求（`task:high` 或 `task:mid`、`isolated: true`、请求名，以及一段只说明席位身份的短 assignment）与简报。简报不经 assignment 传递，而是由 seat adapter 随每次请求注入。
   - registry 读数进入了 `classify`，所以「席位 parked 就用原生 `write agent://` 唤醒」「席位不在就用原生 `task` 派出」本身也是 core 给主会话的票据。adapter 只负责投递，不做任何判断。
 - **C5 席位身份**（omp → seat adapter）：`ctx.agent` 与 registry 状态。它是宿主维护的事实，adapter 每轮只查询，不保存副本。
 

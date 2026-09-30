@@ -270,13 +270,7 @@ export function derive(snap: Snapshot, host: Host, policy: Policy): Derived {
       if (sp.kind === "spawn") {
         const acknowledgeOnly = seat.state === "pendingAck";
         out.push(
-          base(seat.w.spawnId, "spawn", "main", "seat", {
-            kind: "spawn",
-            seat: seat.w,
-            acknowledgeOnly,
-            pending: seat.w.pending,
-            assignment: out.find((o) => o.seat?.requestName === seat.w.requestName)?.brief ?? null,
-          }),
+          base(seat.w.spawnId, "spawn", "main", "seat", { kind: "spawn", seat: seat.w, acknowledgeOnly, pending: seat.w.pending }),
         );
       } else if (seat.w.wakeId !== null && seat.w.holder !== null) {
         out.push(base(seat.w.wakeId, "wake", "main", "seat", { kind: "wake", seat: seat.w, agent: seat.w.holder }));
