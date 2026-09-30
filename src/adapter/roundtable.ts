@@ -33,7 +33,7 @@ import {
   type Transition,
 } from "../core/index.ts";
 import type { Store, StoreError } from "../store/index.ts";
-import { callerOf, idleSubagents, readAgents, spawnPremise } from "./host.ts";
+import { callerOf, idleSubagents, readAgents, spawnPremise, wakeSeat } from "./host.ts";
 import { parseConvene, parseReply, parseResume } from "./parse.ts";
 import { readPolicy } from "./policy.ts";
 import type { Settings } from "./settings.ts";
@@ -197,9 +197,10 @@ export class Roundtable {
   }
 
   /**
-   * One derivation round: load the state file, read GitHub once, derive, execute every program obligation. An effect
-   * result is written back through `step`; any effect (done, result, or failure) changes what the next read sees, so
-   * the round reads again until it executes nothing.
+   * One derivation round: load the state file, read GitHub once, derive, execute every program obligation — GitHub
+   * actions through the store, `wake` through the host. An effect result is written back through `step`; any
+   * execution (done, result, or failure) changes what the next read sees, so the round reads again until it executes
+   * nothing.
    */
   async #round(): Promise<Round> {
     const agenda = this.#active;
@@ -223,6 +224,11 @@ export class Roundtable {
         if (o.holder !== "program" || o.action === null || executedIds.has(o.id)) continue;
         executedIds.add(o.id);
         changed = true;
+        if (o.action.kind === "wake") {
+          const woken = await wakeSeat(o.action.agent);
+          if (!woken.ok) this.#failures.push({ effect: o.id, at: Date.now() as Millis, error: woken.error });
+          continue;
+        }
         const executed = await this.#store.execute(state, o.action);
         if (!executed.ok) {
           this.#failures.push({ effect: o.id, at: Date.now() as Millis, error: `${executed.error.kind}: ${executed.error.detail}` });

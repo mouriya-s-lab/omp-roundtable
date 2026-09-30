@@ -32,20 +32,23 @@
   - 生效的契约裁定（`designGap`、`acceptanceMethod`）及其影响的成员、设计路线与承载者；正文替换，每个 issue 至多一条（基准哈希、目标哈希、是否已应用）；
   - closure 槽位；主题裁定（`orphanDesign`、`migration`、`agendaGap`、`stall`），每个主题只存最新一条及其 pin；效应失败裁定，每个效应只存最新一条；
   - 主会话最近一条被接受的裁定的 id；是否已报告。
-- **席位**（按请求名）：持有者 agentId；已回执唤醒的 parked 期。
+- **席位**（按请求名）：持有者 agentId。
 - `version`：每次写入加一，供 store 做比较交换；不参与推导。
 
 **GitHub 事实 `Facts`**（C1，只代表读取那一刻，不复制进状态）：
 
 - **issue**：状态；最近一次关闭与重开事件（id 与时间，以及是否由合并关闭）；正文哈希；父子图的边。
-- **PR**：状态、head 分支与 head、合并提交与合并时间、目标 repo 与 base、标题与正文哈希；`mergeable: yes | no | unknown`；`checks: pass | fail | pending | unknown`，以及当前失败的 check run id；closing 引用中的 issue（合并后同样保留）。base 不是默认分支时 GitHub 不解析 closing keyword，所以 `prs` 里登记的 PR 也算关闭登记它的成员。
+- **PR**：分两层读。
+  - 登记与接管的 PR（成员 `prs` 与召集时的接管 PR）按编号读全：状态、head 分支与 head、合并提交与合并时间、目标 repo 与 base、标题与正文哈希；`mergeable: yes | no | unknown`；`checks: pass | fail | pending | unknown`，以及当前失败的 check run id；closing 引用中的 issue（合并后同样保留）。
+  - 每个被读 issue 的 closing 引用只读成链接：状态、head 分支与 head、合并提交与合并时间、目标 repo 与 base、closing 引用中的 issue。成员结局、子 issue 终点与设计 commit 是否被承载只用到这些字段；mergeable、checks 与正文只对登记的 PR 有意义。
+  - base 不是默认分支时 GitHub 不解析 closing keyword，所以 `prs` 里登记的 PR 也算关闭登记它的成员。
 - **commit**：状态引用的每个 sha 是否在默认分支上、是否包含在某个 PR 的 head 里；提交之间的包含关系；每个交付目标 base 分支的当前 head，它是 deliver 简报给出的起点。
 
 **宿主观察 `host`**：adapter 每轮向宿主查询，不作保存。
 
 - `seats`：registry 里的每个 agent，含实际 id、请求名（去掉末尾 `-\d+` 后缀）、状态 `live | parked | aborted`，parked 时带本次 parked 期的起点。
-  - 席位状态：存在不是持有者的可用 agent 时为 `pendingAck`；否则持有者 live 时为 `live`，parked 时按这次 parked 期是否已回执唤醒为 `parkedWoken` 或 `parked`；其余为 `absent`。
-- `execution`：本进程内每个效应每次执行失败的时间。重启后为空，等于重新尝试。
+  - 席位状态：存在不是持有者的可用 agent 时为 `pendingAck`；否则持有者 live 时为 `live`，parked 时为 `parked`；其余为 `absent`。
+- `execution`：本进程内每个效应每次执行失败的时间与错误原文，错误原文写进 `decide(effectFailed)` 的简报。重启后为空，等于重新尝试。
 - `policy`：简报要附带的策略原文，以及派出 owner 席位与 gate 席位用的 agent 类型（由设置给出，默认 `task:high` 与 `task:mid`）。它只进入 `realize`，只影响简报与席位请求，不影响 id 或 pin。
 
 **域性质**：
@@ -198,22 +201,20 @@ gate 槽位的取代（`step` 执行）：
 | `rerunChecks(runId)` | checks 裁定为 `rerun` 且未执行 | 状态里已执行 | 裁定置为已执行；之后仍然失败时交给下一次 `decide(checks)`，不再盲目重跑 |
 | `merge(P, h)` | 规则表 | PR 已合并 | —；head 变化后不再推导出来 |
 | `closeParent`、`reopen(parent)` | 收尾表 | parent 状态已相符 | — |
+| `wake(agentId)` | 席位仍然需要，持有者处于 parked；pin 为（agentId，本次 parked 期的起点） | registry 里持有者不再处于这次 parked 期。由 adapter 经宿主 IRC 总线以主会话的名义发消息执行，宿主随之恢复会话 | — |
 
 - 正文替换的基准哈希与当前正文不符、当前正文也不等于目标时，不写入，转为 `decide(stall)`。
 - 崩溃发生在效应执行之后、结果写回之前时，store 在执行前先核对源头（上级 §4 C3），效果已经存在就只写回结果。
-- 效应执行失败：`execution` 记下每次失败的时间。
-  - 最近一次失败还没有钉住它的 `effectFailed` 裁定时：这个效应暂停执行，并给出 Main `decide(effectFailed)`，pin 为（效应 id，失败时间）。
-  - `retry` 只放行这一次失败；再失败会得到新的 pin 和新的裁定。`external` 让这个效应在该裁定有效期间不再执行，并进入等待集合。
-- Main `spawn(请求名)` 与 Main `wake(请求名)`：和其他票据一样，只有主会话显式回执才算消费。回执改变席位状态，所以只在持有者或 parked 期变化时写入。
-  - **spawn：先执行，再回执**。重复派出会多出一个 agent，所以回执必须证明动作已经生效。
-    - 「可用的 agent」：在 registry 中，状态不是 aborted，去掉后缀后等于请求名。「待回执的 agent」：可用、但不是状态里记录的持有者。
-    - pin 为（请求名，状态里的持有者或「无」）。以下任一成立时推导出来：
-      - 存在待回执的 agent。此时不论席位是否仍然需要都要回执，即使子席位已经先完成了工作；简报写明「只需回执」。
-      - 席位仍然需要，持有者已不可用（或还没有持有者），并且没有待回执的 agent。简报写明「用原生 `task` 派出」。
-    - 回执为 `Decision(seated{agentId})`，把持有者改为该 agent；pin 随之改变，这张票据完结。
-  - **wake：先回执，再执行**。重复唤醒无害，而唤醒之后席位就不再 parked，回执在执行之后已经无从核对。
-    - pin 为（agentId，本次 parked 期的起点）；推导条件是持有者处于 parked，并且状态里记录的已唤醒 parked 期不是这一次。
-    - 回执为 `Decision(woken{agentId})`，把已唤醒的 parked 期记为这一次，之后主会话用原生 `write agent://` 唤醒。同一个 parked 期不会再推导出第二张票据；席位下次 parked 是新的一期。
+- 效应执行失败：`execution` 记下每次失败的时间与错误原文。
+  - 有结果写回的效应：最近一次失败还没有钉住它的 `effectFailed` 裁定时，这个效应暂停执行，并给出 Main `decide(effectFailed)`，pin 为（效应 id，失败时间）。`retry` 只放行这一次失败；再失败会得到新的 pin 和新的裁定。`external` 让这个效应在该裁定有效期间不再执行，并进入等待集合。
+  - 没有结果写回的效应（`close`、`reopen`、`merge`、`closeParent`、`reopen(parent)`、`wake`）：下一轮按事实重新推导，条件仍成立就再执行一次。`wake` 投递失败时持有者仍是 parked；持有者已 aborted 时席位变为 `absent`，改由 `spawn` 续作。
+- **Main `spawn(请求名)`：先执行，再回执**。插件不能派出原生子 agent，所以由主会话执行；重复派出会多出一个 agent，所以回执必须证明动作已经生效。
+  - 「可用的 agent」：在 registry 中，状态不是 aborted，去掉后缀后等于请求名。「待回执的 agent」：可用、但不是状态里记录的持有者。
+  - pin 为（请求名，状态里的持有者或「无」）。以下任一成立时推导出来：
+    - 存在待回执的 agent。此时不论席位是否仍然需要都要回执，即使子席位已经先完成了工作；简报写明「只需回执」。
+    - 席位仍然需要，持有者已不可用（或还没有持有者），并且没有待回执的 agent。简报写明「用原生 `task` 派出」。
+  - 回执为 `Decision(seated{agentId})`，把持有者改为该 agent；pin 随之改变，这张票据完结。回执改变席位状态，所以只在持有者变化时写入。
+- 唤醒没有回执：是否已唤醒是 registry 的事实，状态里不留副本。
 
 ### 回复与 `Decision` 变体
 
@@ -222,7 +223,7 @@ gate 槽位的取代（`step` 执行）：
 | `PrSubmit` | owner | 成员的 `submit`（`applied` 置假，清除已处理的待修复项） | `deliver`、`fix` |
 | `Claim(question \| noCode \| split \| blocked)` | owner、reviewer、验收者 | 对应 context 的 `claim` | 不完结（中间型） |
 | `Verdict(ok, note)` | Gate | 票据种类对应的 gate 槽位，由程序盖入 gate 与 pin | 对应的 Gate 义务 |
-| `Decision(subject, verdict, drafts?, bodyReplacements?)` | 主会话 | subject 对应的槽位；草稿与正文替换进入议程与契约 | 对应的 `decide`、`designFix`、`report`、`spawn`（`seated`）、`wake`（`woken`） |
+| `Decision(subject, verdict, drafts?, bodyReplacements?)` | 主会话 | subject 对应的槽位；草稿与正文替换进入议程与契约 | 对应的 `decide`、`designFix`、`report`、`spawn`（`seated`） |
 
 `Decision` 按 subject 划分变体，每个 subject 只接受自己的一组 verdict。完整的变体表见附件 [core.briefs.md](core.briefs.md)「Decision 变体」。其中改变状态中契约或结局的变体包括：
 - `claim(question)` 的 `implDefect`：产生 owner 待修复项；
@@ -279,7 +280,7 @@ gate 槽位的取代（`step` 执行）：
 3. **转移**：对每种回复与效应结果：
    - `step` 返回 `Next(state')` 时 `state' ≠ state`；对 `state'` 再提交同一事件得到 `Same`。
    - 满足与完结：在 `state'` 上推导，被回复的票据或被写回的效应不再出现。
-   - 不改变状态的事件（重复回执、同一 parked 期的第二次唤醒回执、与当前值相同的裁定）得到 `Same`。
+   - 不改变状态的事件（重复回执、与当前值相同的裁定）得到 `Same`。
 4. **模型检查**：
    - 边定义为 α(apply(γ(s), e))，回复与效应结果经 `step` 施加；检查稳定性：取 γ₁ 与 γ₂ 得到的后继状态相同。
    - 边的种类：
@@ -287,8 +288,8 @@ gate 槽位的取代（`step` 执行）：
      - 效应，包括执行失败，以及执行成功但结果未写回；
      - 扰动：推送、正文编辑、人工关闭或重开、checks 或 `mergeable` 变化、席位 parked 或 absent、默认分支前进。默认分支只前进了状态没有引用的提交时，`Situation` 必须不变。
    - 性质：
-     - AG 不变量。
-     - EF 交付完成，前提是以下公平性假设：`unknown` 与 `pending` 最终落定；外部阻塞最终解除；gate 可以失败任意次，但成功始终可达。
+     - AG 不变量，其中包括进展：没到终点、也不在等待集合里时，总有主会话、程序或一名 live 席位持有义务。只由 parked 席位持有、又没有人唤醒的义务就是静默停住。
+     - EF 交付完成，前提是以下公平性假设：`unknown` 与 `pending` 最终落定；外部阻塞最终解除；gate 可以失败任意次，但成功始终可达；唤醒的投递最终成功。
    - 这只证明「有路可走」，不证明一定能成功交付。
 
 ## 7 维护

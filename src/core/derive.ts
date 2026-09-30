@@ -20,11 +20,15 @@ import type { AgendaState, AgentId, Facts, Hash, Host, IssueRef, ObligationId, P
 
 export type ReplyKind = "prSubmit" | "claim" | "verdict" | "decision";
 
-export type ProgramAction =
+/** Program actions the store executes against GitHub. */
+export type StoreAction =
   | { readonly kind: "effect"; readonly target: EffectTarget }
   | { readonly kind: "merge"; readonly pr: PrRef; readonly head: Sha }
   | { readonly kind: "close" | "reopen"; readonly issue: IssueRef }
   | { readonly kind: "closeParent" | "reopenParent"; readonly issue: IssueRef };
+
+/** Every program action: the GitHub ones, and waking a parked seat, which the adapter executes against the host. */
+export type ProgramAction = StoreAction | { readonly kind: "wake"; readonly agent: AgentId; readonly requestName: string };
 
 export interface SeatBinding {
   readonly role: SeatRole;
@@ -275,7 +279,10 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
           }),
         );
       } else if (seat.w.wakeId !== null && seat.w.holder !== null) {
-        out.push(base(seat.w.wakeId, "wake", "main", "seat", { kind: "wake", seat: seat.w, agent: seat.w.holder }));
+        out.push({
+          ...base(seat.w.wakeId, "wake", "program", "seat", { kind: "program", what: "wake" }),
+          action: { kind: "wake", agent: seat.w.holder, requestName: seat.w.requestName },
+        });
       }
     }
   }

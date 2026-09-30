@@ -1,7 +1,7 @@
 // Public API of the store (consumed by the seat adapter). It owns the agenda state file and the GitHub reads and
 // deliverable writes; it never decides whether a transition or an effect should happen (core does).
 
-import type { AgendaId, AgendaState, Facts, LiveFacts, ProgramAction, RepoRef, Sha } from "../core/index.ts";
+import type { AgendaId, AgendaState, Facts, LiveFacts, RepoRef, Sha, StoreAction } from "../core/index.ts";
 import { execute, type Executed } from "./effects.ts";
 import { ContainsCache, readFacts, type CommitPair } from "./facts.ts";
 import type { GitHub } from "./github.ts";
@@ -31,7 +31,7 @@ export interface Store {
   facts(state: AgendaState): Promise<StoreResult<Facts>>;
   /** Live facts `step` checks a PrSubmit on `branch` of `repo` against. */
   live(repo: RepoRef, branch: string, required: readonly Sha[]): Promise<StoreResult<LiveFacts>>;
-  execute(state: AgendaState, action: ProgramAction): Promise<StoreResult<Executed>>;
+  execute(state: AgendaState, action: StoreAction): Promise<StoreResult<Executed>>;
 }
 
 export function createStore(gh: GitHub, dir?: string): Store {

@@ -71,6 +71,6 @@ export const effectDomain: Domain<EffectSituation> = {
 };
 
 export const seatDomain: Domain<SeatSlotSituation> = {
-  seat: ["live", "parked", "parkedWoken", "pendingAck", "absent"],
+  seat: ["live", "parked", "pendingAck", "absent"],
   needed: bool,
 };

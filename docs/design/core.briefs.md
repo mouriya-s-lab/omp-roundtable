@@ -36,9 +36,8 @@
 | accept | 在干净的 detached checkout 上确认 HEAD。经真实入口逐条观察验收行的正负路径：纯库在仓库外自写 driver；CLI 用真实命令；Web 走 `skill://agent-browser`；纯文档核对文档间的语义。不复用作者的 driver 与测试，最后跑 repo 校验，不改 repo |
 | postMerge | 对每个交付目标 repo 分别执行。最新的合并发生在议程召集之后时，在该合并提交的干净 checkout 上执行（R5）；发生在召集之前时（遗留项），在当前默认分支 head 的干净 checkout 上执行，该 head 必须包含合并提交。部署型 repo 在 repo 交付规则规定的目标环境里执行。经真实入口逐条观察覆盖成员的验收行，并跑 repo 校验。与本次无关的失败写在理由里，写明为什么无关 |
 | closure | 对每个交付目标 repo，在包含该 repo 全部合并提交的默认分支 head 上，经真实入口逐行核对 parent 的关闭验证，并核对每个子 issue 的终点事实 |
-| Main `decide(*)` | subject 对应的回复原文与证据；该 subject 可选的 verdict 及各自的后果；需要替换的正文段落及其当前哈希。设计路线的适用条件：`defaultFirst` 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒时改选其他路线；`future` 需要同 repo 的后续承载者，没有就附设计承接项的草稿 |
+| Main `decide(*)` | subject 对应的回复原文与证据；`effectFailed` 附这次执行失败的错误原文；该 subject 可选的 verdict 及各自的后果；需要替换的正文段落及其当前哈希。设计路线的适用条件：`defaultFirst` 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒时改选其他路线；`future` 需要同 repo 的后续承载者，没有就附设计承接项的草稿 |
 | Main `spawn` | 先执行，再回执。registry 中已有请求名匹配、而且不是状态里记录的持有者的可用 agent 时，直接回执；否则用原生 `task` 派出，参数为：`agent`（设置给出的席位 agent 类型：owner 默认 `task:high`，gate 默认 `task:mid`）、`isolated: true`、`name` 取请求名、assignment 取简报。前提：宿主设置 `async.enabled` 为真，并且该 agent 类型没有声明 `blocking: true`，否则主会话会同步等待子席位，席位提问时就会死锁。派出后用 `Decision(seated{agentId})` 回执，agentId 取 `task` 返回的实际 id |
-| Main `wake` | 先回执，再执行：先回复 `Decision(woken{agentId})`，再用原生 `write agent://<实际 id>` 唤醒 |
 | Main `report` | 每项的结局，以及 PR 与 issue 的链接、各验收结论的要点；树关闭的结论；意外写回主会话工作 checkout 的路径。报告由主会话在对话里交给操作员，不写到 GitHub |
 | 所有主会话简报 | 圆桌是唯一的协议渠道。子席位 `yield` 时的文字会作为原生消息送达主会话，但它不是回复，不据此行动 |
 
@@ -70,5 +69,5 @@
 | `stall` | `external(detail)`，或补充事实的草稿与插入 |
 | `designFix` | 设计 commit |
 | `report` | 汇总 |
-| `seated` / `woken` | 实际 agentId。`seated`：该 agent 是待回执的 agent（在 registry 中且不是 aborted，去掉后缀后等于请求名，不是状态里记录的持有者）。`woken`：该 agent 是持有者并处于 parked，本次 parked 期还没有回执过唤醒 |
+| `seated` | 实际 agentId：该 agent 是待回执的 agent（在 registry 中且不是 aborted，去掉后缀后等于请求名，不是状态里记录的持有者） |
 | `noCode`（主会话不持票据，主动提出） | `confirmed`（附理由） |

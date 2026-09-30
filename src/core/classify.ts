@@ -16,6 +16,7 @@ import type {
   AgendaState,
   AgentId,
   Anchor,
+  EffectFailure,
   Claim,
   Context,
   DeliveryTarget,
@@ -33,6 +34,7 @@ import type {
   Observed,
   PendingClaim,
   PrFact,
+  PrLink,
   PrRef,
   ReplacementState,
   ReplyId,
@@ -166,6 +168,8 @@ export interface EffectWitness {
   readonly unit: IssueRef | null;
   /** Obligation pinned (effect id, failure time) for the latest failure (core.md §3 效应). */
   readonly failedId: ObligationId | null;
+  /** The latest execution failure; its error text is what the main session adjudicates. */
+  readonly failure: EffectFailure | null;
   readonly conflictId: ObligationId;
   /** Key a `Decision(stall)` on the effect-conflict ticket must name; the ticket is pinned to it. */
   readonly conflictKey: Hash;
@@ -253,9 +257,14 @@ export const contains = (facts: Facts, repo: IssueRef["repo"], descendant: Sha, 
   descendant === ancestor || facts.commits.contains.some((c) => sameRepo(c.repo, repo) && c.ancestor === ancestor && c.descendant === descendant);
 
 /** Members a PR closes: its closing references, or the members that registered it when GitHub resolves none (non-default base). */
-function closesOf(state: AgendaState, pr: PrFact): IssueRef[] {
+function closesOf(state: AgendaState, pr: PrLink): IssueRef[] {
   if (pr.closes.length > 0) return [...pr.closes];
   return state.members.filter((m) => m.prs.some((p) => samePr(p, pr.ref))).map((m) => m.issue);
+}
+
+/** Every PR the round saw: registered and adopted PRs, then closing references not among them. */
+function allPrs(facts: Facts): PrLink[] {
+  return [...facts.prs, ...facts.links.filter((l) => !facts.prs.some((p) => samePr(p.ref, l.ref)))];
 }
 
 const registered = (member: MemberState, pr: PrRef): boolean => member.prs.some((p) => samePr(p, pr));
@@ -312,8 +321,8 @@ export function rowOwners(state: AgendaState, context: Context): IssueRef[] {
 
 // ---------------------------------------------------------------- outcomes and contracts
 
-function mergedPrFor(state: AgendaState, facts: Facts, member: IssueRef): PrFact | null {
-  const merged = facts.prs.filter((p) => p.state.kind === "merged" && closesOf(state, p).some((c) => sameIssue(c, member)));
+function mergedPrFor(state: AgendaState, facts: Facts, member: IssueRef): PrLink | null {
+  const merged = allPrs(facts).filter((p) => p.state.kind === "merged" && closesOf(state, p).some((c) => sameIssue(c, member)));
   return merged.at(-1) ?? null;
 }
 
@@ -364,7 +373,7 @@ function strandedDesignCommits(state: AgendaState, facts: Facts, units: readonly
   for (const { route } of designRoutes(state)) {
     const repo = route.kind === "future" ? route.carrier.repo : units[0]?.top.target.repo;
     if (repo === undefined || onDefault(facts, repo, route.commit)) continue;
-    const carried = facts.prs.some((p) => p.state.kind === "open" && contains(facts, p.target.repo, p.head, route.commit));
+    const carried = allPrs(facts).some((p) => p.state.kind === "open" && contains(facts, p.target.repo, p.head, route.commit));
     if (!carried) out.push(route.commit);
   }
   return out;
@@ -398,10 +407,7 @@ function seatState(host: Host, state: AgendaState, name: string): { state: SeatS
   const pending = host.agents.find((a) => stripSuffix(a.id) === name && a.status !== "aborted" && a.id !== holderId);
   if (pending !== undefined) return { state: "pendingAck", holder: holderId, pending: pending.id, parkedSince: null };
   if (holder !== undefined && holder.status === "live") return { state: "live", holder: holderId, pending: null, parkedSince: null };
-  if (holder !== undefined && holder.status === "parked") {
-    const woken = rec?.wokenFor !== null && rec?.wokenFor !== undefined && rec.wokenFor === holder.parkedSince;
-    return { state: woken ? "parkedWoken" : "parked", holder: holderId, pending: null, parkedSince: holder.parkedSince };
-  }
+  if (holder !== undefined && holder.status === "parked") return { state: "parked", holder: holderId, pending: null, parkedSince: holder.parkedSince };
   return { state: "absent", holder: holderId, pending: null, parkedSince: null };
 }
 
@@ -945,6 +951,7 @@ function classifyEffects(mint: Mint, state: AgendaState, facts: Facts, host: Hos
         target,
         unit,
         failedId: latest === undefined ? null : mint("decideEffectFailed", "agenda", { effect: id, failedAt: latest.at }, 1),
+        failure: latest ?? null,
         conflictKey,
         conflictId: mint("decideEffectConflict", "agenda", conflictKey, 1),
       },

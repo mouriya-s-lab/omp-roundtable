@@ -46,7 +46,7 @@ const PORT_DESCRIPTION = [
   "    {subject:\"checks\", pr:<issue形状>, runId, verdict:\"rerun\"|\"fixNeeded\"|\"external\"}；{subject:\"postMergeFail\"|\"closureFail\", verdictId, verdict:\"correction\"|\"reverify\"}",
   "    {subject:\"orphanDesign\"|\"migration\"|\"agendaGap\"|\"stall\", key, verdict:\"resolved\"|\"external\"}；{subject:\"effectFailed\", effect:<票据id>, failedAt:<毫秒>, verdict:\"retry\"|\"external\"}",
   "    {subject:\"designFix\", verdictId, commit}；{subject:\"report\", summary}；{subject:\"noCode\", member, bodyHash, reason}",
-  "    {subject:\"seated\", requestName, previous:<agentId>|null, agentId}；{subject:\"woken\", agentId, parkedSince:<票据 pin 的 parkedSince，毫秒>}",
+  "    {subject:\"seated\", requestName, previous:<agentId>|null, agentId}",
   "    Draft = {index, repo:{owner,name}, title, body, anchor:{kind:\"before\"|\"after\"|\"correctionOf\", entry:<issue>}|{kind:\"outsideAgenda\"}, target:{repo, base}, designOnly}；route = {kind:\"defaultFirst\", commit, migration:<issue>|null} | {kind:\"withPr\", commit, designBranch} | {kind:\"future\", commit, carrier:<issue>}",
   "  claim 的 context：{kind:\"member\", member:<issue>} | {kind:\"unitVerification\", unit:<issue>} | {kind:\"agendaClosure\"}；member、unit 等 issue 引用写作 {repo:{owner,name}, number}。",
   "  reply、convene、resume 传 JSON 对象（传 JSON 字符串也会被解码）。字段与取值以票据简报为准。",

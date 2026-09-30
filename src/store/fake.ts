@@ -2,7 +2,7 @@
 // so tests can assert the read budget of a round (omp-roundtable.md Q7) and that a no-op transition writes nothing.
 
 import type { EventId, IssueRef, LifecycleEvent, Millis, PrRef, RepoRef, Sha } from "../core/index.ts";
-import type { ChecksRaw, FactsRequest, FactsResponse, GitHub, IssueRaw, MergeOutcome, NewPr, PrRaw, PrStateRaw } from "./github.ts";
+import type { ChecksRaw, CreatedIssue, FactsRequest, FactsResponse, GitHub, IssueRaw, MergeOutcome, NewPr, PrLinkRaw, PrRaw, PrStateRaw } from "./github.ts";
 
 interface IssueRow {
   ref: IssueRef;
@@ -109,11 +109,15 @@ export class FakeGitHub implements GitHub {
     this.tick("facts");
     const issues: IssueRaw[] = [];
     const prs: PrRaw[] = [];
-    const closing = (ref: IssueRef): PrRaw[] => [...this.prs.values()].filter((p) => p.closes.some((c) => same(c, ref))).map((p) => this.prRaw(p));
+    const links: PrLinkRaw[] = [];
+    const closing = (ref: IssueRef): PrLinkRaw[] =>
+      [...this.prs.values()]
+        .filter((p) => p.closes.some((c) => same(c, ref)))
+        .map((p) => ({ ref: p.ref, state: p.state, headRef: p.headRef, head: p.head, baseRepo: p.ref.repo, base: p.base, closes: [...p.closes] }));
     const take = (ref: IssueRef, withChildren: boolean): void => {
       const row = this.row(ref);
       issues.push({ ...this.issueRaw(row), children: withChildren ? [...row.children] : [] });
-      prs.push(...closing(ref));
+      links.push(...closing(ref));
     };
     for (const i of req.issues) take(i, false);
     if (req.parent !== null) {
@@ -124,6 +128,7 @@ export class FakeGitHub implements GitHub {
     return {
       issues,
       prs,
+      links,
       branches: req.branches.map((b) => ({ ...b, head: this.branches.get(`${repoKey(b.repo)}:${b.branch}`) ?? null })),
       defaultHeads: req.repos.map((r) => {
         const head = this.branches.get(`${repoKey(r)}:${this.defaults.get(repoKey(r)) ?? "main"}`);
@@ -152,9 +157,9 @@ export class FakeGitHub implements GitHub {
     this.tick("openPrsByHead");
     return [...this.prs.values()].filter((p) => repoKey(p.ref.repo) === repoKey(repo) && p.headRef === head && p.state.kind === "open").map((p) => this.prRaw(p));
   }
-  async issuesCreatedSince(repo: RepoRef, since: Millis): Promise<readonly IssueRaw[]> {
+  async issuesCreatedSince(repo: RepoRef, since: Millis): Promise<readonly CreatedIssue[]> {
     this.tick("issuesCreatedSince");
-    return [...this.issues.values()].filter((i) => repoKey(i.ref.repo) === repoKey(repo) && i.createdAt >= since).map((i) => this.issueRaw(i));
+    return [...this.issues.values()].filter((i) => repoKey(i.ref.repo) === repoKey(repo) && i.createdAt >= since).map((i) => ({ ref: i.ref, title: i.title, body: i.body, createdAt: i.createdAt }));
   }
 
   // ------------------------------------------------------------ writes

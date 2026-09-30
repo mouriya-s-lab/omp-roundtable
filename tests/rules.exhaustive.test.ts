@@ -195,7 +195,7 @@ describe("rule layer: exhaustive enumeration (core.md §6.1)", () => {
       if (s.needed && (s.seat === "absent" || s.seat === "pendingAck") && !has(out, "spawn")) return "needed seat not spawned";
       if (s.seat === "pendingAck" && !has(out, "spawn")) return "pending agent without a receipt obligation";
       if (s.needed && s.seat === "parked" && !has(out, "wake")) return "needed parked seat not woken";
-      if ((s.seat === "live" || s.seat === "parkedWoken") && out.length > 0) return "live or already-woken seat given a seat obligation";
+      if (s.seat === "live" && out.length > 0) return "live seat given a seat obligation";
       if (!s.needed && s.seat !== "pendingAck" && out.length > 0) return "unneeded seat acted on";
       return "ok";
     });

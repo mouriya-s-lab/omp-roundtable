@@ -10,9 +10,9 @@ import type { StoreResult } from "./index.ts";
 
 export const DEFAULT_STATE_DIR = join(homedir(), ".omp", "agent", "omp-roundtable", "state");
 
-/** On-disk envelope; `format` changes only with an incompatible AgendaState change. */
+/** On-disk envelope; `format` changes only with an incompatible AgendaState change (2: seat records without `wokenFor`). */
 interface Envelope {
-  readonly format: 1;
+  readonly format: 2;
   readonly state: AgendaState;
 }
 
@@ -30,7 +30,7 @@ function parse(text: string, id: AgendaId): AgendaState {
   const value: unknown = JSON.parse(text);
   if (value === null || typeof value !== "object") throw new Error("state file is not an object");
   const env = value as { format?: unknown; state?: unknown };
-  if (env.format !== 1) throw new Error(`unsupported state file format ${String(env.format)}`);
+  if (env.format !== 2) throw new Error(`unsupported state file format ${String(env.format)}; this plugin reads format 2`);
   const state = env.state as { id?: unknown; version?: unknown; members?: unknown; convened?: unknown } | null;
   if (state === null || typeof state !== "object") throw new Error("state file has no state");
   if (state.id !== id) throw new Error(`state file holds agenda ${String(state.id)}, expected ${id}`);
@@ -39,7 +39,7 @@ function parse(text: string, id: AgendaId): AgendaState {
   return env.state as AgendaState;
 }
 
-const serialize = (state: AgendaState): string => `${JSON.stringify({ format: 1, state } satisfies Envelope, null, 1)}\n`;
+const serialize = (state: AgendaState): string => `${JSON.stringify({ format: 2, state } satisfies Envelope, null, 1)}\n`;
 
 async function readVersion(path: string, id: AgendaId): Promise<number | null> {
   try {

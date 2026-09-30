@@ -23,6 +23,7 @@
 | parked 的席位被恢复后会重新执行插件绑定，所以要在新会话的 `session_start` 里刷新绑定 | `CA/irc/bus.ts:97-184`（`ensureLive`） |
 | 隔离子 agent 第一次的补丁合入之后，后续轮次在保留的工作树里进行，不会再次自动合入 | `CA/task/isolation-runner.ts`；`CA/task/executor.ts` |
 | 插件没有公开的 spawn 接口；`runStructuredSubagent` 需要内部的 `ToolSession`，拿不到 | 探针：`runStructuredSubagent` 预检失败，报错 `getSessionSpawns is not a function` |
+| 插件经包路径 `@oh-my-pi/pi-coding-agent/irc/bus` 拿到进程级单例 `IrcBus.global()`；`send({from: MAIN_AGENT_ID, to, body})` 对 parked 的收件人先经 `AgentLifecycleManager.ensureLive` 恢复会话，再投递消息并开始一轮；不等待收件人的回合，回执 `outcome` 为 `revived`、`woken`、`injected` 或 `failed`（未知、aborted、无法恢复）。宿主自己的 cleanse agent 也这样从主会话唤醒子 agent | `CA/irc/bus.ts:56-186`；`CA/cleanse/agent.ts:204-207`；`PKG` 的 `exports["./*"]`；`CA/registry/agent-lifecycle.ts`（并发的 `ensureLive` 共用一次恢复） |
 | `task` 条目的 `name` 是请求名：同步派出时只保留 `[A-Za-z0-9_-]` 并截断到 48 个字符；同一个分配器里重复的名字会被加上 `-2`、`-3` 后缀，旧条目不会被替换；实际 id 就是 `AgentRef.id`，也就是 `ctx.agent.id` | `CA/task/index.ts:850-870`；`CA/task/structured-subagent.ts:215-218,433-441` |
 | `ctx.agent.name` 是 agent 定义名（例如 `task:mid`），不是请求名。核验调用者的方法是：用 `ctx.agent.id` 查 registry，并确认该条目的 `session.sessionManager` 就是调用者的 `ctx.sessionManager` | 同上；`CA/registry/agent-registry.ts` |
 | `task` 条目的 agent 类型声明了 `blocking: true`，或者宿主设置 `async.enabled` 为假时，子 agent 在父会话这一轮内同步运行，父会话要等它结束才能继续。`async.enabled` 默认为真 | `CA/task/index.ts:749-767,895-896,1302-1306`；`CA/tools/settings.ts:846-850` |
@@ -38,3 +39,5 @@
 | 所有 agent 共用同一个 `gh` 账号（RiriAgent），评论的作者字段无法区分席位 | `gh auth status`；账号路由规则 |
 | base 不是默认分支的 PR，GitHub 不解析其中的 closing keyword：`closingIssuesReferences` 为空，issue 的 `closedByPullRequestsReferences` 也为空 | 探针（#3 交付）：沙盒 PR #8 以 `rt-sandbox/base` 为 base，正文含 `Closes #7`，两个字段都为空 |
 | REST 的 issue 列表在新建 issue 之后会短暂漏掉它；GraphQL 的 `repository.issues` 连接与单个 issue 的读取是写后即读一致的 | 探针（#3 交付）：3 次新建中都观察到，REST 列表在 0.6–2.7 秒内漏掉新 issue，GraphQL 已经列出 |
+| GraphQL 文档定义了却没用到的 fragment 会让整个查询失败 | 探针（真机 E2E，2026-09-30）：只展开 `...PR`、同时定义 `fragment ISSUE` 的查询返回 `Fragment ISSUE was defined, but not used`，`openPr` 因此连续失败 |
+| 一次 GraphQL 查询的可能节点数上限为 500,000，按各层连接的 `first`/`last` 相乘计算，与实际数据量无关 | 探针（同上）：按创建时间列 100 个 issue、每个带 50 个完整 PR（含 100 个 check context）的查询报 `requests up to 1,020,100 possible nodes`；parent 带 100 个 sub-issue 的 facts 查询报 1,040,701。前者改为只读标题、正文与创建时间，后者把 closing 引用改读为链接，之后两个查询都通过 |

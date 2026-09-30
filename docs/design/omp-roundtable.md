@@ -24,7 +24,7 @@
 | 域 | 固有性质 | 证据 |
 |---|---|---|
 | LLM agent（omp 会话） | 上下文会被 compact，compact 后不保证记得协议；输出是可能出错的主张；子 agent 与主会话同在一个 OS 进程，但隔离派出的子 agent 会重新加载插件模块，得到自己的一份模块实例（非隔离子 agent 复用父会话的模块），所以进程内共享的状态要放在 `globalThis` 的 `Symbol.for` 槽位 | omp 18.4.2 源码：`task/executor.ts` 在进程内运行子 agent；`ctx.agent` 暴露 `{kind,id,name,depth,parentId}`；模块加载见附件 [域证据](omp-roundtable.evidence.md) |
-| omp 宿主 | 插件工具可以默认隐藏（`defaultInactive`），由插件在各自会话里用 `setActiveTools` 打开；插件能注册 `/` 命令；`context` 钩子在每次模型请求前执行；`tool_call` 钩子能拦截 `yield`；`sendUserMessage` 能在存活会话里启动一轮对话，对 parked 或 aborted 会话无效；插件不能自己 spawn 原生子 agent | 附件 [域证据](omp-roundtable.evidence.md) |
+| omp 宿主 | 插件工具可以默认隐藏（`defaultInactive`），由插件在各自会话里用 `setActiveTools` 打开；插件能注册 `/` 命令；`context` 钩子在每次模型请求前执行；`tool_call` 钩子能拦截 `yield`；`sendUserMessage` 能在存活会话里启动一轮对话，对 parked 或 aborted 会话无效；插件经包路径拿到宿主的 IRC 总线，以主会话的名义给 parked 子 agent 发消息就会把它唤醒；插件不能自己 spawn 原生子 agent | 附件 [域证据](omp-roundtable.evidence.md) |
 | GitHub | issue、PR、HEAD、合并都在 GitHub 上，并由它维护；所有 agent 共用同一个账号，看作者分不出是谁写的；`mergeable` 可能是 `UNKNOWN`；合并支持 `--match-head-commit`；API 调用有配额（认证用户每小时 5000 次，另有突发限制） | GitHub REST/GraphQL 文档、`gh pr merge --help`、#4 运行中观察到的 403 |
 | 操作员 | 发起一轮交付，决定推进顺序；不在交付过程中被询问 | delivering-issues skill「不停顿」一节 |
 
@@ -87,7 +87,7 @@
 | 来源 | 约束 | 排除了什么 |
 |---|---|---|
 | 技术 | 以 omp 插件形式运行（`package.json` 的 `omp.extensions`），只通过包路径导入宿主模块 | 用绝对路径导入宿主源码（那样会拿到另一份模块单例） |
-| 技术 | 只用宿主公开或已有插件在用的能力：`registerTool`（含 `defaultInactive`）、`registerCommand`、`setActiveTools`、`on(context/tool_call/agent_end/session_*)`、`sendUserMessage` | 调用 `runStructuredSubagent`、`IrcBus` 等宿主内部接口 |
+| 技术 | 只用宿主公开的插件接口（`registerTool`（含 `defaultInactive`）、`registerCommand`、`setActiveTools`、`on(context/tool_call/agent_end/session_*)`、`sendUserMessage`），以及经包路径导入、不依赖会话内部对象的宿主单例（`AgentRegistry`、`IrcBus`） | 调用需要内部 `ToolSession` 的接口，例如 `runStructuredSubagent` |
 | 组织 | GitHub 客户端就是 `gh` CLI，凭据取自 `gh auth` | 另外管理 token |
 | 组织 | 独立仓库，在 omp-config 的 `install-plugins.sh` 里声明安装 | 放在 omp-config 里作为本地扩展 |
 
@@ -133,9 +133,9 @@
 
 | component | 拥有 | 隐藏的决定 | 文档 |
 |---|---|---|---|
-| core | 协议规则与票据内容：`classify`、`rules`、`realize`、`step`，以及各类票据的简报模板与回复 schema；唤醒或派出席位的票据也由它给出 | 状态模型、规则表、守卫、有效性规则、停滞判据、简报内容 | [core.md](core.md) |
-| store | 议程状态文件的版本化读写、GitHub 事实的读取、效应执行 | 状态文件的位置与格式、GitHub 查询的组织与缓存 | 由代码实现 |
-| seat adapter | omp 端口工具、`context` 注入、`yield`/`agent_end` 回执拦截、投递、registry 读数、推导循环、召集与恢复 | 宿主 API 的使用方式 | 由代码实现 |
+| core | 协议规则与票据内容：`classify`、`rules`、`realize`、`step`，以及各类票据的简报模板与回复 schema；派出席位的票据与唤醒席位的效应也由它给出 | 状态模型、规则表、守卫、有效性规则、停滞判据、简报内容 | [core.md](core.md) |
+| store | 议程状态文件的版本化读写、GitHub 事实的读取、GitHub 效应的执行 | 状态文件的位置与格式、GitHub 查询的组织与缓存 | 由代码实现 |
+| seat adapter | omp 端口工具、`context` 注入、`yield`/`agent_end` 回执拦截、投递、registry 读数、唤醒效应的执行、推导循环、召集与恢复 | 宿主 API 的使用方式 | 由代码实现 |
 
 ```mermaid
 flowchart LR
@@ -143,7 +143,7 @@ flowchart LR
   SA -->|"classify / rules / realize / step"| CO["core（纯函数）"]
   ST -->|"gh CLI：读事实、写交付产物"| GH["GitHub"]
   ST -->|"文件"| LO["本地状态文件"]
-  SA -->|"工具 / context / sendUserMessage"| SEATS["席位（主会话与子 agent）"]
+  SA -->|"工具 / context / sendUserMessage / IRC 唤醒"| SEATS["席位（主会话与子 agent）"]
 ```
 
 依赖方向：seat adapter 依赖 core 与 store；store 依赖 core 的类型；core 不依赖任何东西。所以 core 可以单独交付和测试，store 可以脱离 omp 用本地后端测试。
@@ -159,13 +159,14 @@ flowchart LR
   1. seat adapter 把 `(调用者的 ctx.agent, 载荷)` 交给 `step`，得到 `Next(state')`、`Same` 或 `Rejected(reason)`。
   2. `Next`：store 按版本比较交换写入状态文件；版本不符时重读、重算一次，仍不符就拒绝。`Same`：不写，回答「已生效」。
   3. `Rejected` 的理由原样返回给席位。
-- **C3 效应**（core → store）：
-  - 种类见 core.md §3「效应」：依据最新的 `PrSubmit` 创建或更新 PR；依据草稿创建 issue；带基准哈希替换 issue 正文；关闭或重开成员 issue 与 parent；重跑 checks；合并 PR（带 `matchHead`）。
-  - 每个效应都先读源头，效果已经存在就视为完成：PR 按 head 分支查找；正文替换比对当前正文是否已等于目标；草稿建成的 issue 按「草稿提出之后创建、标题相同」在目标 repo 里查找。正文替换的基准哈希不符时，不写入。
-  - 效应的结果（例如新建 PR 的编号、正文替换已应用、草稿建成的 issue）是状态的一部分：执行成功后，以一次状态转移写回。失败作为宿主观察 `execution` 交给下一轮推导，由 core 转成主会话的 `decide(effectFailed)` 票据，不静默重试。
+- **C3 效应**（core → store 与 seat adapter）：
+  - GitHub 效应由 store 执行，种类见 core.md §3「效应」：依据最新的 `PrSubmit` 创建或更新 PR；依据草稿创建 issue；带基准哈希替换 issue 正文；关闭或重开成员 issue 与 parent；重跑 checks；合并 PR（带 `matchHead`）。
+  - 每个 GitHub 效应都先读源头，效果已经存在就视为完成：PR 按 head 分支查找；正文替换比对当前正文是否已等于目标；草稿建成的 issue 按「草稿提出之后创建、标题相同」在目标 repo 里查找。正文替换的基准哈希不符时，不写入。
+  - 效应的结果（例如新建 PR 的编号、正文替换已应用、草稿建成的 issue）是状态的一部分：执行成功后，以一次状态转移写回。创建与更新 PR、创建 issue、替换正文、重跑 checks 的失败作为宿主观察 `execution` 交给下一轮推导，由 core 转成主会话的 `decide(effectFailed)` 票据，不静默重试；合并、关闭与重开没有结果写回，下一轮按 GitHub 事实重新推导，条件仍成立就再执行一次。
+  - 唤醒 parked 席位的效应由 seat adapter 执行：经宿主 IRC 总线以主会话的名义给持有者发一条消息，宿主随之恢复它的会话并开始一轮。完成与否只看 registry：持有者不再处于这次 parked 期。投递失败时席位仍是 parked，下一轮再唤醒；席位已 aborted 时变为缺席，改由主会话派出续作。
 - **C4 票据**（core → seat adapter）：
   - 每张席位票据都带着请求名、席位请求（设置给出的 agent 类型、`isolated: true`、请求名、简报）与简报。
-  - registry 读数进入了 `classify`，所以「席位 parked 就用原生 `write agent://` 唤醒」「席位不在就用原生 `task` 派出」本身也是 core 给主会话的票据。adapter 只负责投递，不做任何判断。
+  - registry 读数进入了 `classify`，所以「席位不在就用原生 `task` 派出」本身也是 core 给主会话的票据，「席位 parked 就唤醒」是 core 给出的效应。adapter 只负责投递与执行，不做任何判断。
 - **C5 席位身份**（omp → seat adapter）：`ctx.agent` 与 registry 状态（含 parked 期）。它是宿主维护的事实，adapter 每轮只查询，不保存副本。
 
 ### 进程视图
@@ -225,7 +226,7 @@ flowchart LR
 - **合并请求已发出但响应丢失**：下一轮读到 PR 已合并，合并效应的前提不再成立，因此不会重复合并。
 - **PR 创建成功但编号没写回状态**：下一轮效应执行前按 head 分支查到这个 PR，直接把编号写回，不再创建。
 - **席位没回复就调用 `yield`**：被拦下，理由中写明它持有的票据和回复方式。
-- **owner 会话变为 parked**：主会话得到一张票据，用原生 `write agent://` 唤醒它。会话已经 aborted 时，主会话按同一个请求名派出续作 owner（registry 会加 `-2` 后缀），续作 owner 在同一个工作目录里接着做同一个 PR。
+- **owner 会话变为 parked**：推导得出唤醒效应，程序经宿主 IRC 总线给它发消息，它被恢复后在注入的票据下继续。会话已经 aborted 时，主会话按同一个请求名派出续作 owner（registry 会加 `-2` 后缀），续作 owner 在同一个工作目录里接着做同一个 PR。
 
 崩溃矩阵见附件 [崩溃矩阵](omp-roundtable.crash-matrix.md)。
 
@@ -239,6 +240,7 @@ flowchart LR
 | 回复经工具提交，由 `step` 核验后转移状态 | agent 自己调用 `gh` 写结果并提交 URL | 输入清单是自报的；伪造与误写无从分辨；agent 可能忘记 |
 | gate 席位只回复通过或不通过（R23） | 席位回报 head、逐行结果与观察到的提交，由程序核对 | 这些都是程序已经知道的事实；让席位回报只会多出一类因抄错而被拒的回复，便宜的模型尤其如此。判断之外的事实一律由程序盖入 |
 | 合并作为程序效应，条件成立即执行（R20） | 保留主会话的授权记录，程序凭授权合并 | R4 的条件都是可机读的事实，授权并不增加判断；多一张主会话票据只会拉长每一项的周期。主会话的判断保留在裁定不通过的结论与契约问题上，那些才是真正需要判断的地方 |
+| 唤醒 parked 席位作为程序效应，完成看 registry | 主会话票据：先回执 `woken`，再用原生 `write agent://` 唤醒 | 真机 E2E 中主会话回执之后没有执行唤醒：状态记下「已唤醒」，席位却一直 parked，主会话不再持有任何票据，交付静默停住；主会话在回执与唤醒之间崩溃也是同样结局。「已唤醒」只是 registry 事实的一份本地副本。唤醒的条件完全可机读，与合并同理（R20） |
 | 席位名由票据身份决定 | 在进程内保存席位与票据的绑定和历史 | 重启后绑定会丢失；gate 新鲜性要靠历史维护；续作的工作目录需要另外记录 |
 | 一次转移只写一次状态，GitHub 对象由效应生成、结果再写回 | 一次转移同时写状态与 PR、issue | 两次写入之间崩溃会造成重复创建或遗漏；效应先查源头再写，结果单独写回，崩溃后可按源头事实补齐 |
 | 独立插件仓库 | omp-config 本地扩展 | core 无法独立测试与发布 |

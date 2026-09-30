@@ -52,7 +52,7 @@ review 或 accept 的不通过结论被裁定为 `rejected` 或 `outOfScope` 时
 ## W7 reviewer 在 gate 进行中提问
 
 1. 同一 context 内有未决的主张，守卫抑制 gate；reviewer 此刻不持有票据，可以 `yield`。
-2. 裁定为 `answered` 或 `outOfDomain`：清单不变，同一个请求名的票据重新出现。席位若 `parked` → Main `wake`；若 `live` → 直接投递。
+2. 裁定为 `answered` 或 `outOfDomain`：清单不变，同一个请求名的票据重新出现。席位若 `parked` → Program `wake`；若 `live` → 直接投递。
 3. 裁定为 `designGap`：清单变化，由新的 reviewer 执行。
 
 ## W8 验收未通过，裁定为验收方法不成立
@@ -153,6 +153,6 @@ d 不在默认分支上，也没有任何可维护的 PR 包含它，承载者�
 
 交付完成，状态里还没有报告 → Main `report` → 主会话在对话里把报告交给操作员，并回复 `Decision(report)`，状态记为已报告。
 
-## W25 同一 parked 期的重复唤醒
+## W25 parked 席位的唤醒
 
-持有者 X 进入 parked，起点为 t → Main `wake`，pin 为（X，t）→ 主会话回复 `woken{X}`，状态记下已唤醒 t，然后唤醒。X 在唤醒生效前仍是 parked、起点仍为 t → 已唤醒的就是这一期，不再推导出票据，不再写状态。X 之后再次 parked，起点为 t' → 新的一张 `wake`。
+持有者 X 进入 parked，起点为 t，它仍持有票据 → Program `wake`，pin 为（X，t）→ adapter 经宿主 IRC 总线以主会话的名义给 X 发消息，宿主恢复 X 的会话，X 在注入的票据下继续。下一轮 registry 显示 X 已是 live，这条效应不再推导出来，状态不写。投递失败时 X 仍是 parked，下一轮再唤醒；X 已 aborted 时席位为 `absent`，按 W22 续作。X 之后再次 parked，起点为 t' → 新的一条 `wake`。

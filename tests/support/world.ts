@@ -107,7 +107,7 @@ export function initialWorld(spec: AgendaSpec): World {
   );
   return {
     state,
-    facts: { issues: [...members, ...parent], prs: [], commits: { onDefault: [{ repo, sha: sha("base0") }], contains: [], baseHead: [] } },
+    facts: { issues: [...members, ...parent], prs: [], links: [], commits: { onDefault: [{ repo, sha: sha("base0") }], contains: [], baseHead: [] } },
     host: { agents: [], failures: [] },
     defaultHead: sha("base0"),
     clock: 2000,
@@ -300,6 +300,14 @@ function programEdges(w: World, c: Classified, ob: Obligation): [string, World |
     case "reopenParent":
       out.push([`program ${a.kind}`, lifecycle(w, a.issue, a.kind === "closeParent" ? "closed" : "reopened")]);
       break;
+    case "wake": {
+      out.push(["program wake", wakeAgent(tick(w), a.agent)]);
+      // delivery failed (IRC receipt `failed`): the adapter records it, core reads no wake failure, the seat stays
+      // parked and the next round wakes it again — the same situation, so it spends no budget
+      const t = tick(w);
+      out.push(["program wake fails", { ...t, host: { ...t.host, failures: [...t.host.failures, { effect: ob.id, at: ms(t.clock), error: "boom" }] } }]);
+      break;
+    }
     default:
       assertNever(a);
   }
@@ -531,16 +539,6 @@ function mainEdges(w: World, c: Classified, ob: Obligation): [string, Stepped | 
       }
       break;
     }
-    case "wake": {
-      const seat = c.seats.find((s) => s.w.wakeId === ob.id);
-      if (seat === undefined || seat.w.holder === null || seat.w.parkedSince === null) break;
-      const holder = seat.w.holder;
-      const a = decision(w, ob, { subject: "woken", agentId: holder, parkedSince: seat.w.parkedSince });
-      add("woken (receipt, then write agent://)", a.kind === "ok" ? { kind: "ok", world: wakeAgent(a.world, holder) } : a);
-      // the receipt is written but the native wake has not happened yet: the same parked episode must not ask again
-      add("woken (receipt only)", a);
-      break;
-    }
     default:
       throw new Error(`model: no main edges for obligation kind ${ob.kind}`);
   }
@@ -685,10 +683,6 @@ function environmentEdges(w: World, c: Classified): [string, World | null, boole
         return { ...t, host: { ...t.host, agents: t.host.agents.map((y) => (y.id === a.id ? { ...y, status, parkedSince: status === "parked" ? ms(t.clock) : null } : y)) } };
       });
     }
-  }
-  // fairness: a parked seat whose wake receipt is written is eventually woken by the native write
-  for (const s of c.seats) {
-    if (s.state === "parkedWoken" && s.w.holder !== null) out.push(["native wake after receipt", wakeAgent(tick(w), s.w.holder), true]);
   }
   // fairness: an `external` checks decision is eventually lifted by a new check run
   if (ours !== null && c.member?.s.checksDecided === "external") {

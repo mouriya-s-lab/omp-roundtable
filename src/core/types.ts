@@ -72,17 +72,22 @@ export interface ChecksFact {
   readonly failedRunId: string | null;
 }
 
-export interface PrFact {
+/** A PR as an issue's closing reference shows it: enough for outcomes and for carried design commits. */
+export interface PrLink {
   readonly ref: PrRef;
   readonly state: PrState;
   readonly headBranch: string;
   readonly head: Sha;
   readonly target: DeliveryTarget;
+  /** Issues in the PR's closing references (kept after merge); empty when the base is not the default branch. */
+  readonly closes: readonly IssueRef[];
+}
+
+/** A PR the agenda registered or adopted: its link plus what delivery reads (body, mergeability, checks). */
+export interface PrFact extends PrLink {
   readonly bodyHash: Hash;
   readonly mergeable: Mergeable;
   readonly checks: ChecksFact;
-  /** Issues in the PR's closing references (kept after merge); empty when the base is not the default branch. */
-  readonly closes: readonly IssueRef[];
 }
 
 export interface CommitFacts {
@@ -95,7 +100,10 @@ export interface CommitFacts {
 
 export interface Facts {
   readonly issues: readonly IssueFact[];
+  /** Every registered and adopted PR. */
   readonly prs: readonly PrFact[];
+  /** The closing references of every issue read, as links. */
+  readonly links: readonly PrLink[];
   readonly commits: CommitFacts;
 }
 
@@ -198,8 +206,7 @@ export type Decision =
   | { readonly subject: "designFix"; readonly verdictId: ReplyId; readonly commit: Sha }
   | { readonly subject: "report"; readonly summary: string }
   | { readonly subject: "noCode"; readonly member: IssueRef; readonly bodyHash: Hash; readonly reason: string }
-  | { readonly subject: "seated"; readonly requestName: string; readonly previous: AgentId | null; readonly agentId: AgentId }
-  | { readonly subject: "woken"; readonly agentId: AgentId; readonly parkedSince: Millis };
+  | { readonly subject: "seated"; readonly requestName: string; readonly previous: AgentId | null; readonly agentId: AgentId };
 
 export interface PrSubmit {
   readonly branch: string;
@@ -338,8 +345,6 @@ export interface UnitState {
 export interface SeatRecord {
   readonly requestName: string;
   readonly holder: AgentId | null;
-  /** The parked episode (its start) already answered by a `woken` receipt. */
-  readonly wokenFor: Millis | null;
 }
 
 export interface SubjectDecision {

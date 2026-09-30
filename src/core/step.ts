@@ -414,10 +414,8 @@ function applyDecision(state: AgendaState, c: Classified, id: ReplyId, reply: Ex
       return state;
     case "seated": {
       const rest = state.seats.filter((x) => x.requestName !== d.requestName);
-      return { ...state, seats: [...rest, { requestName: d.requestName, holder: d.agentId, wokenFor: null }] };
+      return { ...state, seats: [...rest, { requestName: d.requestName, holder: d.agentId }] };
     }
-    case "woken":
-      return { ...state, seats: state.seats.map((x) => (x.holder === d.agentId ? { ...x, wokenFor: d.parkedSince } : x)) };
     default:
       return assertNever(d);
   }
@@ -464,7 +462,6 @@ const DECISION_SUBJECTS: Record<string, readonly Decision["subject"][]> = {
   decideStall: ["stall"],
   report: ["report"],
   spawn: ["seated"],
-  wake: ["woken"],
 };
 
 /**
@@ -514,8 +511,6 @@ function bindingMismatch(c: Classified, ob: Obligation, d: Decision): string | n
       return expect({ effect: d.effect, failedAt: d.failedAt }, "效应失败");
     case "seated":
       return expect({ requestName: d.requestName, previous: d.previous }, "席位与上一任 agent");
-    case "woken":
-      return expect({ agent: d.agentId, parkedSince: d.parkedSince }, "agent 与 parked 期");
     case "report":
     case "noCode":
       return null;
@@ -546,10 +541,6 @@ function preconditions(state: AgendaState, facts: Facts, c: Classified, reply: R
         const seat = c.seats.find((s) => s.w.requestName === d.requestName);
         const pendingAck = c.pendingAcks.find((p) => p.agentId === d.agentId);
         if (seat?.w.pending !== d.agentId && pendingAck === undefined) return "该 agent 不是待回执的 agent（须在 registry 中、非 aborted、请求名匹配、不是已记录的持有者）。";
-      }
-      if (d.subject === "woken") {
-        const seat = c.seats.find((s) => s.w.holder === d.agentId);
-        if (seat === undefined || seat.state !== "parked" || seat.w.parkedSince !== d.parkedSince) return "该 agent 当前不是处于这次 parked 期的席位持有者。";
       }
       if (d.subject === "reopened" && d.verdict === "reopenAccepted") {
         const entry = c.currentUnit?.members.find((m) => sameIssue(m.issue, d.member));
