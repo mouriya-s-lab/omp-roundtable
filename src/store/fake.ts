@@ -113,7 +113,7 @@ export class FakeGitHub implements GitHub {
     const closing = (ref: IssueRef): PrLinkRaw[] =>
       [...this.prs.values()]
         .filter((p) => p.closes.some((c) => same(c, ref)))
-        .map((p) => ({ ref: p.ref, state: p.state, headRef: p.headRef, head: p.head, baseRepo: p.ref.repo, base: p.base, closes: [...p.closes] }));
+        .map((p) => ({ ref: p.ref, state: p.state, headRef: p.headRef, head: p.head, baseRepo: p.ref.repo, base: p.base, closes: [ref] }));
     const take = (ref: IssueRef, withChildren: boolean): void => {
       const row = this.row(ref);
       issues.push({ ...this.issueRaw(row), children: withChildren ? [...row.children] : [] });

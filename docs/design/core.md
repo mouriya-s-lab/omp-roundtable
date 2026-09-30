@@ -40,7 +40,7 @@
 - **issue**：状态；最近一次关闭与重开事件（id 与时间，以及是否由合并关闭）；正文哈希；父子图的边。
 - **PR**：分两层读。
   - 登记与接管的 PR（成员 `prs` 与召集时的接管 PR）按编号读全：状态、head 分支与 head、合并提交与合并时间、目标 repo 与 base、标题与正文哈希；`mergeable: yes | no | unknown`；`checks: pass | fail | pending | unknown`，以及当前失败的 check run id；closing 引用中的 issue（合并后同样保留）。
-  - 每个被读 issue 的 closing 引用只读成链接：状态、head 分支与 head、合并提交与合并时间、目标 repo 与 base、closing 引用中的 issue。成员结局、子 issue 终点与设计 commit 是否被承载只用到这些字段；mergeable、checks 与正文只对登记的 PR 有意义。
+  - 每个被读 issue 的 closing 引用只读成链接：状态、head 分支与 head、合并提交与合并时间、目标 repo 与 base；它关闭的 issue 就是列出它的那些被读 issue。成员结局、子 issue 终点与设计 commit 是否被承载只用到这些字段；mergeable、checks 与正文只对登记的 PR 有意义。
   - base 不是默认分支时 GitHub 不解析 closing keyword，所以 `prs` 里登记的 PR 也算关闭登记它的成员。
 - **commit**：状态引用的每个 sha 是否在默认分支上、是否包含在某个 PR 的 head 里；提交之间的包含关系；每个交付目标 base 分支的当前 head，它是 deliver 简报给出的起点。
 

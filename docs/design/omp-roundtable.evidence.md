@@ -41,3 +41,4 @@
 | REST 的 issue 列表在新建 issue 之后会短暂漏掉它；GraphQL 的 `repository.issues` 连接与单个 issue 的读取是写后即读一致的 | 探针（#3 交付）：3 次新建中都观察到，REST 列表在 0.6–2.7 秒内漏掉新 issue，GraphQL 已经列出 |
 | GraphQL 文档定义了却没用到的 fragment 会让整个查询失败 | 探针（真机 E2E，2026-09-30）：只展开 `...PR`、同时定义 `fragment ISSUE` 的查询返回 `Fragment ISSUE was defined, but not used`，`openPr` 因此连续失败 |
 | 一次 GraphQL 查询的可能节点数上限为 500,000，按各层连接的 `first`/`last` 相乘计算，与实际数据量无关 | 探针（同上）：按创建时间列 100 个 issue、每个带 50 个完整 PR（含 100 个 check context）的查询报 `requests up to 1,020,100 possible nodes`；parent 带 100 个 sub-issue 的 facts 查询报 1,040,701。前者改为只读标题、正文与创建时间，后者把 closing 引用改读为链接，之后两个查询都通过 |
+| GraphQL 的点数按各层连接可能需要的请求数计费：`first`/`last` 沿嵌套相乘后除以 100，与实际返回多少无关；认证用户每小时 5000 点 | 探针（真机 E2E，2026-09-30）：带 parent 的 facts 查询在 issue 的 closing 链接下再读 `closingIssuesReferences(first: 50)`，每次 54 点；每 30 秒一轮，不到一小时就报 `API rate limit already exceeded`。去掉链接下的嵌套连接后同一查询 2 点 |

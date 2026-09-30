@@ -54,7 +54,8 @@ const refOf = (value: unknown, where: string): { repo: RepoRef; number: number }
 
 const FAILED = ["FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED"];
 
-function linkRaw(value: unknown): PrLinkRaw {
+/** The PR fields a link carries; `closes` comes from where the link was read (see `issueRaw` and `prRaw`). */
+function linkRaw(value: unknown, closes: readonly IssueRef[]): PrLinkRaw {
   const node = object(value, "pullRequest");
   const stateName = text(node.state, "PR.state");
   let state: PrStateRaw;
@@ -69,13 +70,13 @@ function linkRaw(value: unknown): PrLinkRaw {
     head: sha(node.headRefOid, "PR.headRefOid"),
     baseRepo: repoName(object(node.baseRepository, "PR.baseRepository").nameWithOwner, "PR.baseRepository.nameWithOwner"),
     base: text(node.baseRefName, "PR.baseRefName"),
-    closes: nodes(node.closingIssuesReferences, "PR.closingIssuesReferences", "next").map((n) => refOf(n, "closing issue")),
+    closes,
   };
 }
 
 function prRaw(value: unknown): PrRaw {
-  const link = linkRaw(value);
   const node = object(value, "pullRequest");
+  const link = linkRaw(value, nodes(node.closingIssuesReferences, "PR.closingIssuesReferences", "next").map((n) => refOf(n, "closing issue")));
   const ref = link.ref;
   const head = link.head;
   const commits = nodes(node.commits, "PR.commits", "none");
@@ -124,20 +125,23 @@ function issueRaw(value: unknown, withChildren: boolean): { issue: IssueRaw; lin
       events: events.sort((a, b) => a.at - b.at),
       children: withChildren ? nodes(node.subIssues, "issue.subIssues", "next").map((c) => refOf(c, "sub-issue")) : [],
     },
-    links: nodes(node.closedByPullRequestsReferences, "issue.closedByPullRequestsReferences", "next").map(linkRaw),
+    // the PR closes this issue: that is what `closedByPullRequestsReferences` lists
+    links: nodes(node.closedByPullRequestsReferences, "issue.closedByPullRequestsReferences", "next").map((n) => linkRaw(n, [ref])),
   };
 }
 
 // ---------------------------------------------------------------- GraphQL documents
 
-// GitHub caps a query at 500,000 possible nodes. An issue's closing PRs are read as links (no checks, rules or body),
-// so a parent with 100 sub-issues plus 50 member issues stays near 400,000; full PR fields are read only for the
-// registered and adopted PRs requested by number.
+// GitHub charges a query by the requests its connections could need (every `first`/`last` multiplied down the
+// nesting, divided by 100) and caps it at 500,000 possible nodes. An issue's closing PRs are therefore read as links
+// without nested connections: the PR closes the issue it was listed under, so no `closingIssuesReferences` is read
+// under them. Full PR fields, including closing references, are read only for the registered and adopted PRs
+// requested by number.
 const LINK_FIELDS = `number repository { nameWithOwner } state mergedAt closedAt mergeCommit { oid }
-  headRefName headRefOid baseRepository { nameWithOwner } baseRefName
-  closingIssuesReferences(first: 50) { nodes { number repository { nameWithOwner } } pageInfo { hasNextPage } }`;
+  headRefName headRefOid baseRepository { nameWithOwner } baseRefName`;
 
 const PR_FIELDS = `...LINK title body mergeable
+  closingIssuesReferences(first: 50) { nodes { number repository { nameWithOwner } } pageInfo { hasNextPage } }
   baseRef { refUpdateRule { requiredStatusCheckContexts } rules(first: 50) { nodes { type } } }
   commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { databaseId conclusion } } } } } } }`;
 

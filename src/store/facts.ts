@@ -86,13 +86,23 @@ function designCommits(state: AgendaState): Sha[] {
   return [...new Set([...state.contracts.flatMap((c) => c.routes.map((r) => r.route.commit)), ...state.members.flatMap((m) => m.designFixes.map((d) => d.commit))])];
 }
 
+/** One link per PR; a PR listed under several issues closes each of them. */
+function mergeLinks(raw: readonly PrLinkRaw[]): PrLinkRaw[] {
+  const byRef = new Map<string, PrLinkRaw>();
+  for (const l of raw) {
+    const seen = byRef.get(refKey(l.ref));
+    byRef.set(refKey(l.ref), seen === undefined ? l : { ...seen, closes: uniqueBy([...seen.closes, ...l.closes], refKey) });
+  }
+  return [...byRef.values()];
+}
+
 /** One round of facts: one `facts` request, plus containment of design commits answered from the cache. */
 export async function readFacts(gh: GitHub, cache: ContainsCache, state: AgendaState): Promise<StoreResult<Facts>> {
   try {
     const request = factsRequest(state);
     const raw = await gh.facts(request);
     const prs = uniqueBy(raw.prs, (p) => refKey(p.ref)).map(prFact);
-    const links = uniqueBy(raw.links, (p) => refKey(p.ref)).map(linkFact);
+    const links = mergeLinks(raw.links).map(linkFact);
     const design = designCommits(state);
     const onDefault: { repo: RepoRef; sha: Sha }[] = [];
     for (const d of raw.defaultHeads)

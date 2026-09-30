@@ -32,7 +32,7 @@ export type PrStateRaw =
 /** Checks for the PR head. `none`: the head has no status-check rollup; `requiresChecks` then decides pass or pending. */
 export type ChecksRaw = { readonly kind: "rollup"; readonly fact: ChecksFact } | { readonly kind: "none"; readonly requiresChecks: boolean };
 
-/** A PR as an issue's closing reference: state, head, base and closing references, without body or checks. */
+/** A PR as an issue's closing reference: state, head and base, without body, checks or nested connections. */
 export interface PrLinkRaw {
   readonly ref: PrRef;
   readonly state: PrStateRaw;
@@ -40,7 +40,10 @@ export interface PrLinkRaw {
   readonly head: Sha;
   readonly baseRepo: RepoRef;
   readonly base: string;
-  /** GitHub `closingIssuesReferences` (empty when the base is not the default branch). */
+  /**
+   * Issues the PR closes. A full PR: GitHub `closingIssuesReferences` (empty when the base is not the default branch).
+   * A link: the issue whose `closedByPullRequestsReferences` listed it.
+   */
   readonly closes: readonly IssueRef[];
 }
 
