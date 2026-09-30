@@ -93,7 +93,7 @@ gate 槽位的取代（`step` 执行）：
 
 - **交付单元**：一个顶层条目，加上它的线性修正链。
 - **成员结局**：
-  - `delivered(mergeSha)`：存在一个已合并、关闭 M 的 PR（closing 引用包含 M，或登记在 M 的 `prs` 里；不论作者、不论 issue 当前是否关闭）；
+  - `delivered(mergeSha)`：存在一个已合并、关闭 M 的 PR（closing 引用包含 M，或登记在 M 的 `prs` 里；不论作者、不论 issue 当前是否关闭）。有多个时取合并时间最晚的，同一时间取 PR 引用较小的，结果与读取顺序无关；
   - `noCode`：有当前有效的 noCode 确认；
   - `pending`：其他情况。
 - **当前单元**：第一个未到终点的单元。
@@ -226,7 +226,7 @@ gate 槽位的取代（`step` 执行）：
 | `Decision(subject, verdict, drafts?, bodyReplacements?)` | 主会话 | subject 对应的槽位；草稿与正文替换进入议程与契约 | 对应的 `decide`、`designFix`、`report`、`spawn`（`seated`） |
 
 `Decision` 按 subject 划分变体，每个 subject 只接受自己的一组 verdict。完整的变体表见附件 [core.briefs.md](core.briefs.md)「Decision 变体」。其中改变状态中契约或结局的变体包括：
-- `claim(question)` 的 `implDefect`：产生 owner 待修复项；
+- `claim(question)` 的 `implDefect`：产生 owner 待修复项，只适用于成员 context 的问题；
 - `designGap` 与 `acceptanceMethod`：改变契约；
 - `reopenAccepted`：清除 noCode 确认；
 - `replacePr`：把当前 PR 加入 `replaced`。
@@ -257,7 +257,7 @@ gate 槽位的取代（`step` 执行）：
   1. 已生效：状态里已是这条回复（席位回复在它的槽位里，主张在未决列表里，主会话的裁定是状态记录的最近一条），或效应结果已登记 → `Same`。
   2. 义务在当前推导结果里，否则拒绝为「已完结」或「无此票据」。唯一的例外是主会话主动提出的 `noCode`：目标必须是当前单元中结局为 `pending` 的成员。
   3. 调用者身份：`ctx.agent.id` 去掉后缀等于请求名，registry 中该 id 的会话就是调用者的会话，状态不是 aborted，并且调用者是该席位的持有者，或是待回执的 agent（子席位可能在主会话回执之前就完成工作）。主会话凭 `kind = main` 通过；效应结果只接受 adapter 自己。
-  4. 回复种类与 `Decision` 变体都可接受；`Decision` 指名的结论、事件、主题、席位或 agent 必须正好是这张票据的 pin；主张所指的上下文必须是这张票据的上下文。结论的 gate 就是票据的种类，席位不填写。不能借一张票据裁定、判定或主张另一件事。
+  4. 回复种类与 `Decision` 变体都可接受；`Decision` 指名的结论、事件、主题、席位或 agent 必须正好是这张票据的 pin；主张所指的上下文必须是这张票据的上下文；裁定主张时 subject 与主张的种类一致，noCode、split 的成员与正文哈希就是主张的成员及其当前正文哈希。结论的 gate 就是票据的种类，席位不填写。不能借一张票据裁定、判定或主张另一件事。
   5. 实时前提成立：`PrSubmit` 的 head 等于远端 head，并且包含应合入的设计 commit。结论只有通过或不通过，没有需要核对的事实。
   6. 由程序把 pin 盖入回复，按上表写进槽位并应用它带来的变化，得到 `state'`。`state'` 与 `state` 相等 → `Same`；否则 `Next(state')`，版本加一。
 

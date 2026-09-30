@@ -4,23 +4,25 @@
 import type { Classified, ClosureWitness, EffectWitness, MemberWitness, ReconcileWitness, SeatWitness, SubjectWitness, Unit, VerificationWitness } from "./classify.ts";
 import { canonical, issueKey } from "./identity.ts";
 import type { MemberSituation } from "./situation.ts";
-import type { AgentId, Decision, Hash, IssueRef, PendingClaim, Policy, PrRef, StoredVerdict } from "./types.ts";
+import type { AgentId, Decision, EffectFailure, Hash, IssueRef, PendingClaim, Policy, PrRef, StoredVerdict } from "./types.ts";
 
 export type BriefInput =
   | { readonly kind: "deliver" | "fix"; readonly member: MemberWitness; readonly situation: MemberSituation }
   | { readonly kind: "review" | "accept"; readonly member: MemberWitness }
   | { readonly kind: "postMerge"; readonly verification: VerificationWitness }
   | { readonly kind: "closure"; readonly closure: ClosureWitness }
-  | { readonly kind: "decideClaim"; readonly member: MemberWitness; readonly claim: PendingClaim }
-  | { readonly kind: "decideVerificationClaim"; readonly claim: PendingClaim; readonly rowOwners: readonly { readonly issue: IssueRef; readonly bodyHash: Hash | null }[] }
+  | { readonly kind: "decideClaim"; readonly member: MemberWitness; readonly claim: PendingClaim; readonly claimBodyHash: Hash | null }
+  | { readonly kind: "decideVerificationClaim"; readonly claim: PendingClaim; readonly claimBodyHash: Hash | null; readonly rowOwners: readonly { readonly issue: IssueRef; readonly bodyHash: Hash | null }[] }
   | { readonly kind: "decideFindings"; readonly member: MemberWitness; readonly verdict: StoredVerdict }
   | { readonly kind: "designFix"; readonly member: MemberWitness; readonly verdict: StoredVerdict }
-  | { readonly kind: "decideChecks"; readonly member: MemberWitness }
-  | { readonly kind: "decideReopened" | "decideClosed"; readonly reconcile: ReconcileWitness }
+  | { readonly kind: "decideChecks"; readonly member: MemberWitness; readonly pr: PrRef; readonly runId: string }
+  | { readonly kind: "decideReopened"; readonly reconcile: ReconcileWitness; readonly event: string }
+  | { readonly kind: "decideClosed"; readonly reconcile: ReconcileWitness; readonly event: string; readonly bodyHash: Hash }
   | { readonly kind: "decidePostMergeFail"; readonly verification: VerificationWitness; readonly verdict: StoredVerdict }
   | { readonly kind: "decideClosureFail"; readonly closure: ClosureWitness; readonly verdict: StoredVerdict }
   | { readonly kind: "decideSubject"; readonly subject: SubjectWitness }
-  | { readonly kind: "decideEffectFailed" | "decideEffectConflict"; readonly effect: EffectWitness }
+  | { readonly kind: "decideEffectFailed"; readonly effect: EffectWitness; readonly failure: EffectFailure }
+  | { readonly kind: "decideEffectConflict"; readonly effect: EffectWitness }
   | { readonly kind: "report"; readonly units: readonly Unit[] }
   | { readonly kind: "spawn"; readonly seat: SeatWitness; readonly acknowledgeOnly: boolean; readonly pending: AgentId | null; readonly agent: string | null; readonly assignment: string | null }
   | { readonly kind: "acknowledge"; readonly requestName: string; readonly agent: AgentId; readonly previous: AgentId | null }
@@ -73,14 +75,14 @@ function seatBrief(ident: BriefIdentity, completion: string, sections: readonly 
     .join("\n\n");
 }
 
-/** A decision as the reply template shows it: its subject, the fields the pin fixes, and `<…>` placeholders. */
+/**
+ * A decision as the reply template shows it: the fields the pin fixes, filled in; a valid default where the main
+ * session chooses among whole objects; and `<…>` string placeholders only for leaf strings it writes itself.
+ */
 type DecisionTemplate = { readonly subject: Decision["subject"] } & Readonly<Record<string, unknown>>;
 
-/**
- * Main briefs end with the exact port call: the decision fields the ticket's pin fixes are filled in; `<…>` marks what
- * the main session chooses. A cheap model then only fills blanks instead of reconstructing the reply schema.
- */
-function mainBrief(ident: BriefIdentity, title: string, facts: string, options: string, decision: DecisionTemplate): string {
+/** Main briefs end with the exact port call, so a cheap model fills leaves instead of reconstructing the reply schema. */
+function mainBrief(ident: BriefIdentity, title: string, facts: string, options: string, decision: DecisionTemplate, choices: readonly string[] = []): string {
   const reply = { kind: "decision", decision, rationale: "<裁定理由>" };
   return [
     identityBlock({ ...ident, kind: `${ident.kind}（主会话）：${title}` }, "用端口回复对应的 `Decision`；只有回复才算消费这张票据。"),
@@ -90,25 +92,56 @@ function mainBrief(ident: BriefIdentity, title: string, facts: string, options: 
     "## 可选裁定与要求",
     options,
     "## 回复",
-    `调用 roundtable：op "reply"，ticket "${ident.id}"，reply 为下面的 JSON；只替换 \`<…>\` 占位，其余字段原样保留。需要时加 drafts、bodyReplacements。`,
+    [
+      `调用 roundtable：op "reply"，ticket "${ident.id}"，reply 为下面的 JSON。`,
+      "- 把 `<…>` 字符串占位整体换成你的内容（连同引号一起写成 JSON 字符串）。",
+      ...(choices.length === 0 ? [] : ["- `verdict` 给的是一个合法的默认值；选别的裁定时，把整个 `verdict` 值换成下列之一：", ...choices.map((c) => `  - \`${c}\``)]),
+      "- 其余字段由程序按票据填好，不要改动；question 的 `affected` 例外，列出受这次契约裁定影响的全部成员。",
+      "- 需要时加 `drafts`、`bodyReplacements`。",
+    ].join("\n"),
     `\`\`\`json\n${JSON.stringify(reply, null, 1)}\n\`\`\``,
   ].join("\n\n");
 }
 
-const QUESTION_VERDICT = '<下列之一，原样替换整个值：{"kind":"answered"} | {"kind":"outOfDomain"} | {"kind":"implDefect"} | {"kind":"acceptanceMethod"} | {"kind":"designGap","route":<route，见 op 说明>}>';
-const FINDING_VERDICT =
-  '<下列之一，原样替换整个值：{"kind":"upheld","responsible":"owner"} | {"kind":"upheld","responsible":"main"} | {"kind":"rejected","basis":"<依据>"} | {"kind":"outOfScope","draft":<Draft>} | {"kind":"designGap","route":<route>} | {"kind":"acceptanceMethod"}>';
+const ROUTE_SHAPES =
+  'route 为 {"kind":"defaultFirst","commit":"<40 位 sha>","migration":null} | {"kind":"withPr","commit":"<40 位 sha>","designBranch":"<分支>"} | {"kind":"future","commit":"<40 位 sha>","carrier":{"repo":{"owner":"<owner>","name":"<name>"},"number":<N>}}';
+const DRAFT_SHAPE =
+  'Draft 为 {"index":0,"repo":{"owner":"<owner>","name":"<name>"},"title":"<标题>","body":"<正文>","anchor":{"kind":"outsideAgenda"},"target":{"repo":{"owner":"<owner>","name":"<name>"},"base":"<base>"},"designOnly":false}';
 
-/** The decision a pending claim is answered with, by claim kind. */
-function claimTemplate(claim: PendingClaim, member: IssueRef | null, bodyHash: Hash | null): DecisionTemplate {
+/** Question verdicts; `implDefect` only where the asker owns code to repair (a member context). */
+function questionChoices(memberContext: boolean): string[] {
+  return [
+    '{"kind":"answered"}',
+    '{"kind":"outOfDomain"}',
+    ...(memberContext ? ['{"kind":"implDefect"}'] : []),
+    '{"kind":"acceptanceMethod"}',
+    `{"kind":"designGap","route":<route>}，其中 ${ROUTE_SHAPES}`,
+  ];
+}
+
+const FINDING_CHOICES = [
+  '{"kind":"upheld","responsible":"owner"}',
+  '{"kind":"upheld","responsible":"main"}',
+  '{"kind":"rejected","basis":"<依据>"}',
+  `{"kind":"outOfScope","draft":<Draft>}，其中 ${DRAFT_SHAPE}`,
+  `{"kind":"designGap","route":<route>}，其中 ${ROUTE_SHAPES}`,
+  '{"kind":"acceptanceMethod"}',
+];
+
+/** The decision a pending claim is answered with, by claim kind, and the whole-object verdict choices. */
+function claimTemplate(claim: PendingClaim, affected: readonly IssueRef[], claimBodyHash: Hash | null): { decision: DecisionTemplate; choices: string[] } {
   switch (claim.claim.kind) {
     case "question":
-      return { subject: "question", claim: claim.id, verdict: QUESTION_VERDICT, affected: member === null ? [] : [member] };
+      return { decision: { subject: "question", claim: claim.id, verdict: { kind: "answered" }, affected }, choices: questionChoices(claim.claim.context.kind === "member") };
     case "noCode":
     case "split":
-      return { subject: claim.claim.kind === "noCode" ? "noCodeClaim" : "splitClaim", claim: claim.id, member: claim.claim.member, bodyHash: bodyHash ?? "<成员当前正文哈希>", verdict: "<confirmed | refuted>" };
+      if (claimBodyHash === null) throw new Error(`claim ${claim.id}: member ${issueKey(claim.claim.member)} has no body hash in the facts`);
+      return {
+        decision: { subject: claim.claim.kind === "noCode" ? "noCodeClaim" : "splitClaim", claim: claim.id, member: claim.claim.member, bodyHash: claimBodyHash, verdict: "<confirmed 或 refuted>" },
+        choices: [],
+      };
     case "blocked":
-      return { subject: "blockedClaim", claim: claim.id, verdict: "<replacePr | external | refuted>" };
+      return { decision: { subject: "blockedClaim", claim: claim.id, verdict: "<replacePr、external 或 refuted>" }, choices: [] };
     default:
       return assertNever(claim.claim);
   }
@@ -253,7 +286,8 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         ],
         policy,
       );
-    case "decideClaim":
+    case "decideClaim": {
+      const t = claimTemplate(input.claim, [input.member.entry.issue], input.claimBodyHash);
       return mainBrief(
         ident,
         "裁定契约问题或主张",
@@ -267,9 +301,12 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
           "noCode / split：confirmed 改变结局（noCode 结束该成员；split 须附拆分后的正文替换与草稿）；refuted 让 owner 继续原票据。",
           "blocked：replacePr 放弃当前 PR，owner 以新的 attempt 重新交付；external 让该成员进入等待集合，须立即报告操作员；refuted 让 owner 继续。",
         ].join("\n"),
-        claimTemplate(input.claim, input.member.entry.issue, input.member.issue?.bodyHash ?? null),
+        t.decision,
+        t.choices,
       );
-    case "decideVerificationClaim":
+    }
+    case "decideVerificationClaim": {
+      const t = claimTemplate(input.claim, input.rowOwners.map((o) => o.issue), input.claimBodyHash);
       return mainBrief(
         ident,
         "裁定验收席位的契约问题",
@@ -282,8 +319,10 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
           `- designGap(route)：改变契约。${ROUTES}`,
           "- acceptanceMethod：改变契约，须附对上列验收行所在 issue 之一的正文替换，基准为该 issue 的当前正文哈希；验收以新的验收行重新执行。",
         ].join("\n"),
-        claimTemplate(input.claim, input.rowOwners[0]?.issue ?? null, input.rowOwners[0]?.bodyHash ?? null),
+        t.decision,
+        t.choices,
       );
+    }
     case "decideFindings":
       return mainBrief(
         ident,
@@ -297,7 +336,8 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
           `- designGap(route)：改变契约，已有结论失效、gate 重新执行。${ROUTES}`,
           `- acceptanceMethod：改变契约，须附对成员验收行的正文替换，基准为当前正文哈希 ${input.member.issue?.bodyHash ?? "?"}；gate 重新执行。`,
         ].join("\n"),
-        { subject: "findings", verdictId: input.verdict.id, verdict: FINDING_VERDICT },
+        { subject: "findings", verdictId: input.verdict.id, verdict: { kind: "upheld", responsible: "owner" } },
+        FINDING_CHOICES,
       );
     case "designFix":
       return mainBrief(
@@ -311,36 +351,36 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       return mainBrief(
         ident,
         "checks 在同一个 head 上反复失败",
-        [`- 失败 run：${input.member.failedRun ?? "?"}（owner 已就这个 run 完成过一次修复）`, memberFacts(input.member)].join("\n"),
+        [`- 失败 run：${input.runId}（owner 已就这个 run 完成过一次修复）`, memberFacts(input.member)].join("\n"),
         [
           "- rerun：程序重跑 checks；之后仍失败，交给下一次 decide(checks)。",
           "- fixNeeded：owner 得到修复票据，须推送新 head。",
           "- external：该成员进入等待集合，须立即报告操作员。",
         ].join("\n"),
-        { subject: "checks", pr: input.member.pr?.ref ?? "<PR>", runId: input.member.failedRun ?? "<run id>", verdict: "<rerun | fixNeeded | external>" },
+        { subject: "checks", pr: input.pr, runId: input.runId, verdict: "<rerun、fixNeeded 或 external>" },
       );
     case "decideReopened":
       return mainBrief(
         ident,
         "结局确立后 issue 被重新打开",
-        `- 成员：${issueUrl(input.reconcile.member)}\n- 重开事件：${input.reconcile.eventForDecision ?? "?"}`,
+        `- 成员：${issueUrl(input.reconcile.member)}\n- 重开事件：${input.event}`,
         [
           "- restore：程序重新关闭该 issue。",
           "- correction(附修正草稿，锚点 correctionOf)：草稿建成新 issue 并进入议程；单元重新通过 postMerge 之后，程序关闭该 issue。",
           "- reopenAccepted（仅限结局为 noCode 的成员）：撤销 noCode 确认，成员回到待交付。",
         ].join("\n"),
-        { subject: "reopened", member: input.reconcile.member, event: input.reconcile.eventForDecision ?? "<事件 id>", verdict: "<restore | correction | reopenAccepted>" },
+        { subject: "reopened", member: input.reconcile.member, event: input.event, verdict: "<restore、correction 或 reopenAccepted>" },
       );
     case "decideClosed":
       return mainBrief(
         ident,
         "待交付成员已被关闭",
-        `- 成员：${issueUrl(input.reconcile.member)}\n- 关闭事件：${input.reconcile.eventForDecision ?? "?"}\n- 当前正文哈希：${input.reconcile.bodyHash ?? "?"}`,
+        `- 成员：${issueUrl(input.reconcile.member)}\n- 关闭事件：${input.event}\n- 当前正文哈希：${input.bodyHash}`,
         [
           "- confirmedNoCode(附理由)：成员结局为 noCode，裁定钉住当前正文哈希；正文之后变化则失效。",
           "- reopen：程序重新打开该 issue，成员继续交付。",
         ].join("\n"),
-        { subject: "closed", member: input.reconcile.member, event: input.reconcile.eventForDecision ?? "<事件 id>", bodyHash: input.reconcile.bodyHash ?? "<正文哈希>", verdict: "<confirmedNoCode | reopen>" },
+        { subject: "closed", member: input.reconcile.member, event: input.event, bodyHash: input.bodyHash, verdict: "<confirmedNoCode 或 reopen>" },
       );
     case "decidePostMergeFail":
       return mainBrief(
@@ -351,7 +391,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
           "- correction(附修正草稿，锚点 correctionOf)：草稿建成新 issue 并插入议程，修正落地后再验收。",
           "- reverify：以新的 attempt 在同一提交上重新验收。",
         ].join("\n"),
-        { subject: "postMergeFail", verdictId: input.verdict.id, verdict: "<correction | reverify>" },
+        { subject: "postMergeFail", verdictId: input.verdict.id, verdict: "<correction 或 reverify>" },
       );
     case "decideClosureFail":
       return mainBrief(
@@ -359,7 +399,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         "树关闭验收失败",
         replyFact("结论", input.verdict.id, input.verdict.verdict),
         ["- 补项草稿：建成新 issue 并插入议程，落地后再做关闭验收。", "- reverify：以新的 attempt 重新做关闭验收。"].join("\n"),
-        { subject: "closureFail", verdictId: input.verdict.id, verdict: "<correction | reverify>" },
+        { subject: "closureFail", verdictId: input.verdict.id, verdict: "<correction 或 reverify>" },
       );
     case "decideSubject":
       return mainBrief(
@@ -367,18 +407,18 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         `裁定 ${input.subject.subject}`,
         `- ${canonical(input.subject)}`,
         ["- resolved(附草稿或插入)：补上缺失的承载者、迁移或议程项。", "- external：进入等待集合，须立即报告操作员。"].join("\n"),
-        { subject: input.subject.subject, key: input.subject.key, verdict: "<resolved | external>" },
+        { subject: input.subject.subject, key: input.subject.key, verdict: "<resolved 或 external>" },
       );
     case "decideEffectFailed":
       return mainBrief(
         ident,
         "程序效应执行失败",
-        [`- 效应 ${input.effect.id}（${input.effect.target.kind}）：${canonical(input.effect.target)}`, `- 失败原因：${input.effect.failure?.error ?? "?"}`].join("\n"),
+        [`- 效应 ${input.effect.id}（${input.effect.target.kind}）：${canonical(input.effect.target)}`, `- 失败原因：${input.failure.error}`].join("\n"),
         [
           "- retry：只放行这一次失败，程序重新执行；再失败会得到新的票据。",
           "- external：该裁定有效期间不再执行，进入等待集合，须立即报告操作员。",
         ].join("\n"),
-        { subject: "effectFailed", effect: input.effect.id, failedAt: input.effect.failure?.at ?? "<失败时间>", verdict: "<retry | external>" },
+        { subject: "effectFailed", effect: input.effect.id, failedAt: input.failure.at, verdict: "<retry 或 external>" },
       );
     case "decideEffectConflict":
       return mainBrief(
@@ -386,7 +426,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         "正文替换的基准哈希已不符",
         `- 效应 ${input.effect.id}：${canonical(input.effect.target)}`,
         `- 回复 Decision(stall{key: ${input.effect.conflictKey}})：resolved 时附上以当前正文哈希为基准的新替换，它取代这次冲突的替换；external 表示外部阻塞，须立即报告操作员。`,
-        { subject: "stall", key: input.effect.conflictKey, verdict: "<resolved | external>" },
+        { subject: "stall", key: input.effect.conflictKey, verdict: "<resolved 或 external>" },
       );
     case "report":
       return mainBrief(
@@ -397,9 +437,12 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         { subject: "report", summary: "<写给操作员的汇总原文>" },
       );
     case "spawn": {
-      const seated: DecisionTemplate = { subject: "seated", requestName: input.seat.requestName, previous: input.seat.holder, agentId: input.acknowledgeOnly ? (input.pending ?? "<待回执 agent 的 id>") : "<task 返回的实际 id>" };
-      if (input.acknowledgeOnly)
-        return mainBrief(ident, "回执已派出的席位", `请求名 ${input.seat.requestName}，待回执 agent ${input.pending ?? "?"}`, "先执行、再回执：它已存在，直接回复 seated。", seated);
+      if (input.acknowledgeOnly) {
+        if (input.pending === null) throw new Error(`spawn ${input.seat.requestName}: acknowledge-only without a pending agent`);
+        const seated: DecisionTemplate = { subject: "seated", requestName: input.seat.requestName, previous: input.seat.holder, agentId: input.pending };
+        return mainBrief(ident, "回执已派出的席位", `请求名 ${input.seat.requestName}，待回执 agent ${input.pending}`, "先执行、再回执：它已存在，直接回复 seated。", seated);
+      }
+      const seated: DecisionTemplate = { subject: "seated", requestName: input.seat.requestName, previous: input.seat.holder, agentId: "<task 返回的实际 id>" };
       const brief = mainBrief(
         ident,
         "派出席位",
@@ -426,7 +469,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         "停滞：推导不出任何义务，也不在等待集合里",
         canonical(input.classified.stall),
         "resolved 附上补充事实（草稿、插入）；external 表示外部阻塞，须立即报告操作员。",
-        { subject: "stall", key: input.classified.stall.key, verdict: "<resolved | external>" },
+        { subject: "stall", key: input.classified.stall.key, verdict: "<resolved 或 external>" },
       );
     case "program":
       return `程序效应：${input.what}（${ident.id}）`;

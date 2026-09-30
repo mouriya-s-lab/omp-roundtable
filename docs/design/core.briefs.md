@@ -14,7 +14,7 @@
 
 ## 席位（owner、gate）简报共有的块
 
-主会话简报不带以下各块：主会话本身已经持有这些策略与规则，它的简报在身份块之后只写「圆桌是唯一的协议渠道」、事实，以及可选的裁定与要求。
+主会话简报不带以下各块：主会话本身已经持有这些策略与规则，它的简报在身份块之后只写「圆桌是唯一的协议渠道」、事实、可选的裁定与要求，以及回复模板。
 
 - **分工**：
   - 只对自己的票据负责，不与其他席位就协议事务交流。
@@ -39,7 +39,7 @@
 | Main `decide(*)` | subject 对应的回复原文与证据；`effectFailed` 附这次执行失败的错误原文；该 subject 可选的 verdict 及各自的后果；需要替换的正文段落及其当前哈希。设计路线的适用条件：`defaultFirst` 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒时改选其他路线；`future` 需要同 repo 的后续承载者，没有就附设计承接项的草稿 |
 | Main `spawn` | 先执行，再回执。registry 中已有请求名匹配、而且不是状态里记录的持有者的可用 agent 时，直接回执；否则用原生 `task` 派出，参数为：`agent`（设置给出的席位 agent 类型：owner 默认 `task:high`，gate 默认 `task:mid`）、`isolated: true`、`name` 取请求名、assignment 取简报。前提：宿主设置 `async.enabled` 为真，并且该 agent 类型没有声明 `blocking: true`，否则主会话会同步等待子席位，席位提问时就会死锁。派出后用 `Decision(seated{agentId})` 回执，agentId 取 `task` 返回的实际 id |
 | Main `report` | 每项的结局，以及 PR 与 issue 的链接、各验收结论的要点；树关闭的结论；意外写回主会话工作 checkout 的路径。报告由主会话在对话里交给操作员，不写到 GitHub |
-| 所有主会话简报 | 圆桌是唯一的协议渠道。子席位 `yield` 时的文字会作为原生消息送达主会话，但它不是回复，不据此行动 |
+| 所有主会话简报 | 圆桌是唯一的协议渠道。子席位 `yield` 时的文字会作为原生消息送达主会话，但它不是回复，不据此行动。末尾给出这张票据的完整回复 JSON：pin 决定的字段由程序填好；需要在整个对象之间选择的 `verdict` 给出一个合法默认值，并列出每个可选对象的完整 JSON；主会话只替换 `<…>` 字符串占位，question 的 `affected` 由主会话列出受影响的成员 |
 
 ## 回复载荷 schema
 
@@ -57,7 +57,7 @@
 
 | subject | verdict |
 |---|---|
-| `claim(question)` | `answered`、`outOfDomain`、`implDefect`（产生 owner 待修复项）、`designGap(route)`、`acceptanceMethod`（须附正文替换，对象是问题所涉验收行所在的 issue：成员 context 为该成员，单元验收为该单元的成员之一，树关闭为 parent） |
+| `claim(question)` | `answered`、`outOfDomain`、`implDefect`（产生 owner 待修复项，只适用于成员 context 的问题）、`designGap(route)`、`acceptanceMethod`（须附正文替换，对象是问题所涉验收行所在的 issue：成员 context 为该成员，单元验收为该单元的成员之一，树关闭为 parent） |
 | `claim(noCode)`、`claim(split)` | `confirmed`、`refuted` |
 | `claim(blocked)` | `replacePr`、`external`、`refuted` |
 | `findings` | 对这条不通过的结论给出一个裁定：`upheld(owner \| main)`、`rejected`、`outOfScope`（附草稿）、`designGap(route)`、`acceptanceMethod`（须附对该成员的正文替换） |
