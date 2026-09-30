@@ -6,6 +6,7 @@ import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentRegistry, MAIN_AGENT_ID, type AgentStatus } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
+import { getRepoRoot } from "@oh-my-pi/pi-coding-agent/task/worktree";
 import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { stripSuffix, type AgentId, type Caller, type Millis, type RegisteredAgent, type RegistryStatus } from "../core/index.ts";
 
@@ -73,7 +74,8 @@ export async function wakeSeat(agent: AgentId): Promise<{ readonly ok: true } | 
 
 /**
  * Spawn premise (design「派出的前提」): the main session's `task` must run asynchronously — host setting `async.enabled`
- * — and neither configured seat agent type may declare `blocking: true`. Returns the refusal reason.
+ * — neither configured seat agent type may declare `blocking: true`, and `isolated: true` must be preparable, which
+ * the host allows only inside a repository (its own `getRepoRoot`). Returns the refusal reason.
  */
 export async function spawnPremise(ctx: ExtensionContext, seatAgents: { readonly owner: string; readonly gate: string }): Promise<string | null> {
   const session = AgentRegistry.global().get(ctx.agent.id)?.session ?? null;
@@ -85,6 +87,11 @@ export async function spawnPremise(ctx: ExtensionContext, seatAgents: { readonly
     const def = agents.find((a) => a.name === type);
     if (def === undefined) return `召集被拒绝：找不到席位所需的 agent 类型 ${type}。`;
     if (def.blocking === true) return `召集被拒绝：agent 类型 ${type} 声明了 blocking: true，派出时主会话会同步等待，席位提问时会死锁。`;
+  }
+  try {
+    await getRepoRoot(ctx.cwd);
+  } catch (err) {
+    return `召集被拒绝：席位以 isolated: true 派出，宿主要求主会话的工作目录在仓库里，而 ${ctx.cwd} 不在（${err instanceof Error ? err.message : String(err)}）。请在仓库目录里启动主会话后重新召集。`;
   }
   return null;
 }
