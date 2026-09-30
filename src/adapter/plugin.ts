@@ -37,13 +37,13 @@ const PORT_DESCRIPTION = [
   "- op \"reply\"：回复一张票据。ticket = 票据 id（ob-…）；reply = 回复载荷，形状同 core 的 Reply（不含 obligation）：",
   "  {kind:\"prSubmit\", branch, head(40位sha), title, body, template:\"fourLayer\"|\"docOnly\", retryNote?}",
   "  {kind:\"claim\", claim:{kind:\"question\", context, reproduction, readings:[a,b], earliestGap, proposal} | {kind:\"noCode\", member, evidence} | {kind:\"split\", member, proposal} | {kind:\"blocked\", member, category, attempts}}",
-  "  {kind:\"verdict\", verdict:{gate:\"review\", observedHead, gates:[5×\"pass\"|\"fail\"|\"notRun\"], findings:[{id,location,consequence,reproduction,responsible:\"owner\"|\"main\"}]} | {gate:\"accept\", observedHead, rows:[{rowId,command,output,pass}], findings, unrelated:[{description,reproduction}]} | {gate:\"postMerge\", observed:[{repo:{owner,name},commit}], rows, unrelated} | {gate:\"closure\", observed, rows}}",
+  "  {kind:\"verdict\", ok:true|false, note}：gate 票据（review、accept、postMerge、closure）只回复通过或不通过，note 写理由；head、验收行、观察到的提交由程序按票据 pin 盖入。",
   "  {kind:\"decision\", decision:<下列之一>, rationale, drafts?:Draft[], bodyReplacements?:[{issue, baseHash, body}]}；主会话不持票据主动提出 noCode 时 ticket 为 null。decision 按 subject 取值（主张 id、结论 id 形如 re-…，事件 id、pin 字段取自票据简报）：",
   "    {subject:\"question\", claim:<主张id>, verdict:{kind:\"answered\"|\"outOfDomain\"|\"implDefect\"|\"acceptanceMethod\"} | {kind:\"designGap\", route}, affected:[<issue>]}",
   "    {subject:\"noCodeClaim\"|\"splitClaim\", claim, member:<issue>, bodyHash, verdict:\"confirmed\"|\"refuted\"}；{subject:\"blockedClaim\", claim, verdict:\"replacePr\"|\"external\"|\"refuted\"}",
-  "    {subject:\"findings\", verdictId, perFinding:[{findingId, verdict:{kind:\"upheld\", responsible:\"owner\"|\"main\"} | {kind:\"rejected\", basis} | {kind:\"outOfScope\", draft} | {kind:\"designGap\", route} | {kind:\"acceptanceMethod\"}}]}",
+  "    {subject:\"findings\", verdictId, verdict:{kind:\"upheld\", responsible:\"owner\"|\"main\"} | {kind:\"rejected\", basis} | {kind:\"outOfScope\", draft} | {kind:\"designGap\", route} | {kind:\"acceptanceMethod\"}}",
   "    {subject:\"closed\", member, event, bodyHash, verdict:\"confirmedNoCode\"|\"reopen\"}；{subject:\"reopened\", member, event, verdict:\"restore\"|\"correction\"|\"reopenAccepted\"}",
-  "    {subject:\"checks\", pr:<issue形状>, runId, verdict:\"rerun\"|\"fixNeeded\"|\"external\"}；{subject:\"postMergeFail\"|\"closureFail\", verdictId, verdict:\"correction\"|\"reverify\"}；{subject:\"unrelated\", verdictId}",
+  "    {subject:\"checks\", pr:<issue形状>, runId, verdict:\"rerun\"|\"fixNeeded\"|\"external\"}；{subject:\"postMergeFail\"|\"closureFail\", verdictId, verdict:\"correction\"|\"reverify\"}",
   "    {subject:\"orphanDesign\"|\"migration\"|\"agendaGap\"|\"stall\", key, verdict:\"resolved\"|\"external\"}；{subject:\"effectFailed\", effect:<票据id>, failedAt:<毫秒>, verdict:\"retry\"|\"external\"}",
   "    {subject:\"designFix\", verdictId, commit}；{subject:\"report\", summary}；{subject:\"noCode\", member, bodyHash, reason}",
   "    {subject:\"seated\", requestName, previous:<agentId>|null, agentId}；{subject:\"woken\", agentId, parkedSince:<票据 pin 的 parkedSince，毫秒>}",
@@ -73,15 +73,28 @@ function decoded(value: unknown): unknown {
   }
 }
 
+const TOOL = "roundtable";
+
 export default async function roundtable(pi: ExtensionAPI): Promise<void> {
   processSlot[SLOT] ??= create();
   const rt = await processSlot[SLOT];
 
+  /** The port tool is active in this session only in roundtable mode (main) or as a seat of the driven agenda. */
+  const syncTool = async (ctx: ExtensionContext): Promise<void> => {
+    const active = pi.getActiveTools();
+    const has = active.includes(TOOL);
+    const want = rt.sees(ctx);
+    if (want && !has) await pi.setActiveTools([...active, TOOL]);
+    if (!want && has) await pi.setActiveTools(active.filter((name) => name !== TOOL));
+  };
+
   pi.registerTool({
-    name: "roundtable",
+    name: TOOL,
     label: "Roundtable",
     description: PORT_DESCRIPTION,
     loadMode: "essential",
+    // Invisible until `/roundtable` (main) or seat binding (subagent) activates it.
+    defaultInactive: true,
     approval: "write",
     parameters: PortParams,
     async execute(_id, raw, _signal, _onUpdate, ctx) {
@@ -109,15 +122,32 @@ export default async function roundtable(pi: ExtensionAPI): Promise<void> {
     },
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.registerCommand("roundtable", {
+    description: "进入圆桌模式（显示 roundtable 端口工具）；`/roundtable off` 退出。只在主会话有效。",
+    async handler(args, ctx) {
+      if (ctx.agent.kind !== "main") return;
+      rt.bind(pi, ctx);
+      const refusal = rt.setMode(args.trim() !== "off");
+      if (refusal !== null) {
+        ctx.ui.notify(refusal, "warning");
+        return;
+      }
+      await syncTool(ctx);
+      ctx.ui.notify(rt.mode ? "圆桌模式：roundtable 端口工具已可用。" : "已退出圆桌模式。", "info");
+    },
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
     rt.bind(pi, ctx);
+    await syncTool(ctx);
     // Timer recompute, owned by the main session binding (cleared by the host at its session_shutdown).
     if (ctx.agent.kind === "main") ctx.setInterval(() => void rt.trigger("timer"), rt.recomputeIntervalMs);
   });
   pi.on("session_shutdown", (_event, ctx) => rt.unbind(ctx));
 
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     if (ctx.agent.kind === "main") rt.observeSystemPrompt(event.systemPrompt);
+    await syncTool(ctx);
   });
 
   // Ticket injection: appended for this request only, never written into the session history.

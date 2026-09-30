@@ -15,6 +15,8 @@
 | 只有通过包路径导入（例如 `@oh-my-pi/pi-coding-agent/registry/agent-registry`）才能拿到 CLI 运行时的单例；用绝对路径导入源码会得到另一份单例 | 探针：包路径导入时输出 `registry= Main`，绝对路径导入时输出 `registry= missing`；`PKG:56-64` |
 | `ctx.agent` 提供 `kind`、`id`、`name`、`depth`、`parentId?`，工具的 `execute` 和 `pi.on` 的处理函数都能拿到 | `CA/extensibility/extensions/types.ts:431-452`；`CA/sdk.ts:3227-3244` |
 | 插件注册的工具默认对子 agent 可见，除非会话设置了 `restrictToolNames`，或工具声明了 `hidden` / `defaultInactive` | `CA/sdk.ts:2542-2569` |
+| 声明 `defaultInactive: true` 的工具注册后不在初始工具集里；注册它的插件用 `pi.setActiveTools` 在自己绑定的会话里打开或关闭它。宿主自带的 autoresearch 模式就是这样：`/autoresearch` 命令打开实验工具，退出时再关闭 | `CA/extensibility/extensions/types.ts:647-653,1524-1531`；`CA/sdk.ts:3919-3950`；`CA/autoresearch/index.ts:93-103,125-218` |
+| 插件用 `pi.registerCommand(name, {handler})` 注册 `/name` 命令；处理函数拿到的 `ctx` 带 `agent` 与 `ui.notify` | `CA/extensibility/extensions/types.ts:1251-1256,1436-1443` |
 | `tool_call` 钩子在调用者自己的会话里执行，可以返回 `{block, reason}` 拦截调用；处理函数出错时按拦截处理 | `CA/extensibility/extensions/wrapper.ts:255-278`；`CA/extensibility/shared-events.ts:319-333` |
 | `context` 钩子在每次主循环模型请求前执行，接收并返回 `{messages}`；在主会话和子会话中都会执行；追加的消息只用于本次请求，不写进会话历史 | 源码：`CA/extensibility/shared-events.ts`（`context` 事件）。探针：compact 之后抓到的下一次请求体里带着注入的标记 |
 | `sendUserMessage` / `sendMessage` 只作用于该绑定所在的会话：会话存活且空闲时会启动一轮，正在运行时会排队；会话 parked 之后旧绑定失效，aborted 时不可投递 | `CA/extensibility/extensions/types.ts:1492-1516`；`CA/irc/bus.ts:97-184`；`CA/task/executor.ts:3210-3253` |
@@ -30,7 +32,6 @@
 
 | 性质 | 证据 |
 |---|---|
-| 渲染 Markdown 时隐藏 HTML 注释（`<!-- ... -->`） | GitHub Flavored Markdown 规范中关于 HTML 块的部分 |
 | `gh pr merge --match-head-commit <sha>` 在 HEAD 不符时拒绝合并 | `gh pr merge --help` |
 | PR 的 `mergeable` 由后台计算，可能返回 `UNKNOWN` | GitHub GraphQL `PullRequest.mergeable`（`MergeableState`） |
 | 已关闭的 sub-issue 会计入 parent 的完成进度 | GitHub sub-issues 文档 |

@@ -29,8 +29,6 @@ export interface Store {
   list(): Promise<StoreResult<readonly AgendaId[]>>;
   /** The GitHub facts of one derivation round. */
   facts(state: AgendaState): Promise<StoreResult<Facts>>;
-  /** Which of `pairs` hold (descendant contains ancestor), from the immutable cache first: a postMerge verdict's observed commits. */
-  contained(pairs: readonly CommitPair[]): Promise<StoreResult<readonly CommitPair[]>>;
   /** Live facts `step` checks a PrSubmit on `branch` of `repo` against. */
   live(repo: RepoRef, branch: string, required: readonly Sha[]): Promise<StoreResult<LiveFacts>>;
   execute(state: AgendaState, action: ProgramAction): Promise<StoreResult<Executed>>;
@@ -45,15 +43,6 @@ export function createStore(gh: GitHub, dir?: string): Store {
     save: (next) => files.save(next),
     list: () => files.list(),
     facts: (state) => readFacts(gh, cache, state),
-    async contained(pairs) {
-      try {
-        const out: CommitPair[] = [];
-        for (const p of pairs) if (await cache.get(gh, p)) out.push(p);
-        return { ok: true, value: out };
-      } catch (err) {
-        return { ok: false, error: { kind: "read", detail: err instanceof Error ? err.message : String(err) } };
-      }
-    },
     async live(repo, branch, required) {
       try {
         const head = await gh.branchHead(repo, branch);

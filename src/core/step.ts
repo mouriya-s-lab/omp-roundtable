@@ -18,7 +18,6 @@ import type {
   Draft,
   DraftId,
   Facts,
-  FindingDecision,
   GateSlot,
   Host,
   IssueRef,
@@ -47,7 +46,7 @@ export type Caller =
 export type Reply =
   | ({ readonly kind: "prSubmit"; readonly obligation: ObligationId } & PrSubmit)
   | { readonly kind: "claim"; readonly obligation: ObligationId; readonly claim: Claim }
-  | { readonly kind: "verdict"; readonly obligation: ObligationId; readonly verdict: Verdict }
+  | { readonly kind: "verdict"; readonly obligation: ObligationId; readonly ok: boolean; readonly note: string }
   | {
       readonly kind: "decision";
       /** Null only for the unsolicited `noCode` decision. */
@@ -99,7 +98,6 @@ export function convene(id: AgendaId, at: Millis, parent: IssueRef | null, entri
     claims: [],
     contracts: [],
     replacements: [],
-    unrelated: [],
     subjects: [],
     effectDecisions: [],
     seats: [],
@@ -200,7 +198,6 @@ function applyReply(
     const unbound = bindingMismatch(c, ob, reply.decision);
     if (unbound !== null) return reject(unbound);
   }
-  if (reply.kind === "verdict" && reply.verdict.gate !== ob.kind) return reject(`这张票据是 ${ob.kind}，不接受 ${reply.verdict.gate} 结论。`);
   if (reply.kind === "claim" && claimContextKey(reply.claim) !== ob.context)
     return reject(`主张所指的上下文 ${claimContextKey(reply.claim)} 不是这张票据的上下文 ${ob.context}。`);
 
@@ -215,10 +212,10 @@ function applyReply(
     case "claim":
       return next({ ...state, claims: [...state.claims, { id, claim: reply.claim }] });
     case "verdict":
-      return applyVerdict(state, c, ob, id, reply.verdict);
+      return applyVerdict(state, c, ob, id, reply);
     case "decision": {
       const d = reply.decision;
-      const outOfScope = d.subject === "findings" ? d.perFinding.flatMap((f) => (f.verdict.kind === "outOfScope" ? [f.verdict.draft] : [])) : [];
+      const outOfScope = d.subject === "findings" && d.verdict.kind === "outOfScope" ? [d.verdict.draft] : [];
       const decided = applyDecision(state, c, id, reply, at);
       return next({ ...withAttachments(decided, id, [...reply.drafts, ...outOfScope], reply.bodyReplacements, at), lastDecision: id });
     }
@@ -266,14 +263,14 @@ function applySubmit(state: AgendaState, c: Classified, ob: Obligation, reply: E
   }));
 }
 
-function applyVerdict(state: AgendaState, c: Classified, ob: Obligation, id: ReplyId, verdict: Verdict): Transition {
+/** The seat said ok or not ok; the gate is the ticket's kind and the pin is the ticket's manifest (core.md §4 step 6). */
+function applyVerdict(state: AgendaState, c: Classified, ob: Obligation, id: ReplyId, reply: Extract<Reply, { kind: "verdict" }>): Transition {
+  const gate = ob.kind;
+  if (gate !== "review" && gate !== "accept" && gate !== "postMerge" && gate !== "closure") return reject(`这张票据（${ob.kind}）不是 gate 票据。`);
+  const verdict: Verdict = { gate, ok: reply.ok, note: reply.note };
   const store = (slot: GateSlot, manifest: StoredVerdict["manifest"] | null): GateSlot | null =>
     manifest === null ? null : { ...slot, verdict: { id, ticket: ob.id, attempt: slot.attempt, manifest, verdict, adjudication: null, failDecision: null } };
-  const withUnrelated = (s: AgendaState): AgendaState => {
-    const unrelated = verdict.gate === "accept" || verdict.gate === "postMerge" ? verdict.unrelated : [];
-    return unrelated.length === 0 ? s : { ...s, unrelated: [...s.unrelated, { verdictId: id, failures: unrelated }] };
-  };
-  switch (verdict.gate) {
+  switch (gate) {
     case "review":
     case "accept": {
       const w = c.member?.w;
@@ -281,7 +278,7 @@ function applyVerdict(state: AgendaState, c: Classified, ob: Obligation, id: Rep
       const m = memberOf(state, w.entry.issue);
       const slot = store(verdict.gate === "review" ? m.review : m.accept, verdict.gate === "review" ? w.reviewManifest : w.acceptManifest);
       if (slot === null) return reject("当前没有可钉住的 PR 输入。");
-      return next(withUnrelated(updateMember(state, w.entry.issue, (x) => (verdict.gate === "review" ? { ...x, review: slot } : { ...x, accept: slot }))));
+      return next(updateMember(state, w.entry.issue, (x) => (gate === "review" ? { ...x, review: slot } : { ...x, accept: slot })));
     }
     case "postMerge": {
       const w = c.verification?.w;
@@ -291,7 +288,7 @@ function applyVerdict(state: AgendaState, c: Classified, ob: Obligation, id: Rep
       const slot = store(current, w.manifest);
       if (slot === null) return reject("当前没有可钉住的验收输入。");
       const units = state.units.some((u) => sameIssue(u.top, top)) ? state.units.map((u) => (sameIssue(u.top, top) ? { ...u, postMerge: slot } : u)) : [...state.units, { top, postMerge: slot }];
-      return next(withUnrelated({ ...state, units }));
+      return next({ ...state, units });
     }
     case "closure": {
       const slot = store(state.closure, c.closure.w.manifest);
@@ -299,7 +296,7 @@ function applyVerdict(state: AgendaState, c: Classified, ob: Obligation, id: Rep
       return next({ ...state, closure: slot });
     }
     default:
-      return assertNever(verdict);
+      return assertNever(gate);
   }
 }
 
@@ -357,14 +354,13 @@ function applyDecision(state: AgendaState, c: Classified, id: ReplyId, reply: Ex
     case "findings": {
       if (active === null) return state;
       const member = active.entry.issue;
-      const routes = d.perFinding.flatMap((f) => (f.verdict.kind === "designGap" ? [{ route: f.verdict.route, carrier: f.verdict.route.kind === "future" ? f.verdict.route.carrier : f.verdict.route.kind === "withPr" ? member : null }] : []));
-      const changesContract = d.perFinding.some((f) => f.verdict.kind === "designGap" || f.verdict.kind === "acceptanceMethod");
-      const dismissed = d.perFinding.every((f) => f.verdict.kind === "rejected" || f.verdict.kind === "outOfScope");
+      const v = d.verdict;
+      const routes = v.kind === "designGap" ? [{ route: v.route, carrier: v.route.kind === "future" ? v.route.carrier : v.route.kind === "withPr" ? member : null }] : [];
+      const changesContract = v.kind === "designGap" || v.kind === "acceptanceMethod";
+      const dismissed = v.kind === "rejected" || v.kind === "outOfScope";
       const adjudicate = (slot: GateSlot): GateSlot =>
-        slot.verdict === null || slot.verdict.id !== d.verdictId
-          ? slot
-          : { attempt: dismissed ? slot.attempt + 1 : slot.attempt, verdict: { ...slot.verdict, adjudication: d.perFinding } };
-      const rejected = d.perFinding.filter((f) => f.verdict.kind === "rejected").map((f) => `${d.verdictId}/${f.findingId}`);
+        slot.verdict === null || slot.verdict.id !== d.verdictId ? slot : { attempt: dismissed ? slot.attempt + 1 : slot.attempt, verdict: { ...slot.verdict, adjudication: v } };
+      const rejected = v.kind === "rejected" ? [d.verdictId] : [];
       const s = updateMember(state, member, (m) => ({
         ...m,
         review: adjudicate(m.review),
@@ -397,8 +393,6 @@ function applyDecision(state: AgendaState, c: Classified, id: ReplyId, reply: Ex
           : { attempt: d.verdict === "reverify" ? slot.attempt + 1 : slot.attempt, verdict: { ...slot.verdict, failDecision: d.verdict } };
       return d.subject === "postMergeFail" ? { ...state, units: state.units.map((u) => ({ ...u, postMerge: fail(u.postMerge) })) } : { ...state, closure: fail(state.closure) };
     }
-    case "unrelated":
-      return { ...state, unrelated: state.unrelated.filter((u) => u.verdictId !== d.verdictId) };
     case "orphanDesign":
     case "migration":
     case "agendaGap":
@@ -463,7 +457,6 @@ const DECISION_SUBJECTS: Record<string, readonly Decision["subject"][]> = {
   decideClosed: ["closed"],
   decidePostMergeFail: ["postMergeFail"],
   decideClosureFail: ["closureFail"],
-  "decide:unrelated": ["unrelated"],
   "decide:orphanDesign": ["orphanDesign"],
   "decide:migration": ["migration"],
   "decide:agendaGap": ["agendaGap"],
@@ -494,7 +487,6 @@ function bindingMismatch(c: Classified, ob: Obligation, d: Decision): string | n
     case "designFix":
     case "postMergeFail":
     case "closureFail":
-    case "unrelated":
       return expect(d.verdictId, "结论");
     case "checks": {
       const pr = c.member?.w.pr?.ref ?? null;
@@ -542,35 +534,8 @@ function preconditions(state: AgendaState, facts: Facts, c: Classified, reply: R
       if (missing.length > 0) return `head 尚未包含应合入的设计 commit：${missing.join(", ")}。`;
       return null;
     }
-    case "verdict": {
-      const v = reply.verdict;
-      if (v.gate === "review" || v.gate === "accept") {
-        const pr = c.member?.w.pr;
-        if (pr === undefined || pr === null || pr.head !== v.observedHead) return "观察到的 head 与票据钉住的 head 不一致。";
-        if (v.gate === "accept") return rowsMatch(facts, c.member?.w.entry.issue ?? null, v.rows.map((r) => r.rowId));
-        return null;
-      }
-      if (v.gate === "postMerge") {
-        const w = c.verification?.w;
-        if (w === undefined || w.manifest.gate !== "postMerge") return "当前不在单元验证阶段。";
-        // Per target repo: one observed commit. Non-legacy: exactly the unit's latest merge in that repo (R5),
-        // which must contain the repo's earlier merges. Legacy: any commit containing all of the repo's merges.
-        const repos = [...new Map(w.manifest.merges.map((m) => [`${m.repo.owner}/${m.repo.name}`, m.repo])).values()];
-        for (const repo of repos) {
-          const merges = w.manifest.merges.filter((m) => m.repo.owner === repo.owner && m.repo.name === repo.name);
-          const obs = v.observed.find((o) => o.repo.owner === repo.owner && o.repo.name === repo.name);
-          if (obs === undefined) return `缺少 ${repo.name} 的观察提交。`;
-          const containsCommit = (commit: Sha): boolean => obs.commit === commit || facts.commits.contains.some((x) => x.ancestor === commit && x.descendant === obs.commit);
-          const latest = merges.at(-1);
-          if (!w.legacy && latest !== undefined && obs.commit !== latest.commit) return `${repo.name} 的观察提交须恰好是最新的合并提交 ${latest.commit}。`;
-          const missing = merges.find((m) => !containsCommit(m.commit));
-          if (missing !== undefined) return `${repo.name} 的观察提交须包含合并提交 ${missing.commit}。`;
-        }
-        const rows = w.unit.members.flatMap((m) => facts.issues.find((i) => sameIssue(i.ref, m.issue))?.acceptanceRows ?? []);
-        return sameSet(rows, v.rows.map((r) => r.rowId)) ? null : "验收行 id 集合与覆盖成员的验收行不一致。";
-      }
-      return rowsMatch(facts, c.closure.w.parent, v.rows.map((r) => r.rowId));
-    }
+    case "verdict":
+      return null;
     case "decision": {
       for (const b of reply.bodyReplacements) {
         const issue = facts.issues.find((i) => sameIssue(i.ref, b.issue));
@@ -593,7 +558,7 @@ function preconditions(state: AgendaState, facts: Facts, c: Classified, reply: R
       const methodContext: Context | null =
         d.subject === "question" && d.verdict.kind === "acceptanceMethod"
           ? questionContext(state, d.claim)
-          : d.subject === "findings" && d.perFinding.some((f) => f.verdict.kind === "acceptanceMethod") && c.member !== null
+          : d.subject === "findings" && d.verdict.kind === "acceptanceMethod" && c.member !== null
             ? { kind: "member", member: c.member.w.entry.issue }
             : null;
       if (methodContext !== null) {
@@ -601,12 +566,9 @@ function preconditions(state: AgendaState, facts: Facts, c: Classified, reply: R
         if (!reply.bodyReplacements.some((b) => owners.some((o) => sameIssue(o, b.issue))))
           return `acceptanceMethod 裁定必须附带正文替换，替换对象为验收行所在的 issue 之一：${owners.map(issueKey).join("、") || "（无）"}。`;
       }
-      if (d.subject === "findings") {
-        for (const f of d.perFinding)
-          if (f.verdict.kind === "designGap") {
-            const bad = routeIssue(facts, c, f.verdict.route);
-            if (bad !== null) return bad;
-          }
+      if (d.subject === "findings" && d.verdict.kind === "designGap") {
+        const bad = routeIssue(facts, c, d.verdict.route);
+        if (bad !== null) return bad;
       }
       if (d.subject === "question" && d.verdict.kind === "designGap") return routeIssue(facts, c, d.verdict.route);
       return null;
@@ -638,12 +600,6 @@ function routeIssue(facts: Facts, c: Classified, route: Route): string | null {
     default:
       return assertNever(route);
   }
-}
-
-function rowsMatch(facts: Facts, issueRef: IssueRef | null, rows: readonly string[]): string | null {
-  const issue = issueRef === null ? undefined : facts.issues.find((i) => sameIssue(i.ref, issueRef));
-  if (issue === undefined) return "找不到验收行所属的 issue。";
-  return sameSet(issue.acceptanceRows, rows) ? null : "验收行 id 集合与 issue 的验收行不一致（缺行或重复）。";
 }
 
 /** Context of the pending question a `claim(question)` decision answers (null when it is not a pending question). */
@@ -690,10 +646,6 @@ function uniqueIssues(list: readonly IssueRef[]): IssueRef[] {
   const out: IssueRef[] = [];
   for (const i of list) if (!out.some((o) => sameIssue(o, i))) out.push(i);
   return out;
-}
-
-function sameSet(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && new Set(b).size === b.length && a.every((x) => b.includes(x));
 }
 
 function assertNever(x: never): never {

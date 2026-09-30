@@ -22,13 +22,13 @@
 - **议程**：id；召集时间；parent；召集清单（不可变，每项带召集载荷：交付目标 repo 与 base、是否仅设计、要接管的 PR）；草稿（每条带锚点、内容、提出时间，建成后登记 issue）。议程顺序由召集清单加上已建成、要进议程的草稿按锚点插入得出。
 - **成员**（每个进入议程的 issue 一份）：
   - `submit`：最新一条 `PrSubmit`，带它完结的 deliver 或 fix 票据 id，以及是否已应用到当前 PR、应用时署名的设计 commit；`prs`：程序为 M 创建的 PR 与召集时接管的 PR；`replaced`：被 `replacePr` 放弃的 PR；
-  - `review`、`accept` 两个 gate 槽位：attempt、最新结论（带它的 pin 与 attempt）、对该结论的发现裁定；此前被驳回的 review 发现；
+  - `review`、`accept` 两个 gate 槽位：attempt、最新结论（带它的 pin 与 attempt）、主会话对不通过结论的裁定；此前被驳回的 review 结论；
   - 待修复项：`implDefect`、`fixNeeded`（各带裁定理由，下一次 `PrSubmit` 时清除）、主会话的 `designFix` commit；
   - checks：最新的 checks 裁定（钉住 run id，`rerun` 时带是否已执行）；最近一次引出过完结 `fix` 的 run id；
   - noCode 确认（钉住正文哈希与确认时间）；对账裁定（钉住生命周期事件）；`external` 阻塞。
 - **单元**：postMerge 槽位（同 gate 槽位，裁定为 `correction` 或 `reverify`）。
 - **议程级**：
-  - 未决的主张，裁定后清除；待裁定的无关失败；
+  - 未决的主张，裁定后清除；
   - 生效的契约裁定（`designGap`、`acceptanceMethod`）及其影响的成员、设计路线与承载者；正文替换，每个 issue 至多一条（基准哈希、目标哈希、是否已应用）；
   - closure 槽位；主题裁定（`orphanDesign`、`migration`、`agendaGap`、`stall`），每个主题只存最新一条及其 pin；效应失败裁定，每个效应只存最新一条；
   - 主会话最近一条被接受的裁定的 id；是否已报告。
@@ -37,7 +37,7 @@
 
 **GitHub 事实 `Facts`**（C1，只代表读取那一刻，不复制进状态）：
 
-- **issue**：状态；最近一次关闭与重开事件（id 与时间，以及是否由合并关闭）；正文哈希；从正文验收表解析出的验收行 id，形如 `<owner>/<repo>#<issue>/<行号>`，跨 issue 全局唯一；父子图的边。
+- **issue**：状态；最近一次关闭与重开事件（id 与时间，以及是否由合并关闭）；正文哈希；父子图的边。
 - **PR**：状态、head 分支与 head、合并提交与合并时间、目标 repo 与 base、标题与正文哈希；`mergeable: yes | no | unknown`；`checks: pass | fail | pending | unknown`，以及当前失败的 check run id；closing 引用中的 issue（合并后同样保留）。base 不是默认分支时 GitHub 不解析 closing keyword，所以 `prs` 里登记的 PR 也算关闭登记它的成员。
 - **commit**：状态引用的每个 sha 是否在默认分支上、是否包含在某个 PR 的 head 里；提交之间的包含关系；每个交付目标 base 分支的当前 head，它是 deliver 简报给出的起点。
 
@@ -46,7 +46,7 @@
 - `seats`：registry 里的每个 agent，含实际 id、请求名（去掉末尾 `-\d+` 后缀）、状态 `live | parked | aborted`，parked 时带本次 parked 期的起点。
   - 席位状态：存在不是持有者的可用 agent 时为 `pendingAck`；否则持有者 live 时为 `live`，parked 时按这次 parked 期是否已回执唤醒为 `parkedWoken` 或 `parked`；其余为 `absent`。
 - `execution`：本进程内每个效应每次执行失败的时间。重启后为空，等于重新尝试。
-- `policy`：简报要附带的策略原文。它只进入 `realize`，只影响简报内容，不影响 id 或 pin。
+- `policy`：简报要附带的策略原文，以及派出 owner 席位与 gate 席位用的 agent 类型（由设置给出，默认 `task:high` 与 `task:mid`）。它只进入 `realize`，只影响简报与席位请求，不影响 id 或 pin。
 
 **域性质**：
 - `unknown` 与 `pending` 是独立的状态；正文版本用哈希表示。
@@ -81,10 +81,10 @@
 | review、accept、postMerge、closure | 槽位里的 attempt，由 `step` 在取代时加一，见下 |
 
 gate 槽位的取代（`step` 执行）：
-- review、accept：对失败结论的裁定使全部发现为 `rejected` 或 `outOfScope`；或者结论有被维持的发现，裁定之后 owner 提交了 `PrSubmit`（只改证据的修复）。
+- review、accept：对不通过结论的裁定为 `rejected` 或 `outOfScope`；或者裁定为维持，之后 owner 提交了 `PrSubmit`（只改证据的修复）。
 - postMerge、closure：对失败结论裁定 `reverify`。
 
-槽位里结论的 attempt 小于槽位 attempt 时，这条结论为 `superseded`。review 的发现被驳回时，清单本身也会变（它包含「此前被驳回的发现」），两种变化任一发生都换一名新席位。
+槽位里结论的 attempt 小于槽位 attempt 时，这条结论为 `superseded`。review 结论被驳回时，清单本身也会变（它包含「此前被驳回的结论」），两种变化任一发生都换一名新席位。
 
 ### 交付单元、成员与对账
 
@@ -130,8 +130,8 @@ gate 槽位的取代（`step` 执行）：
 |---|---|
 | `claims = pending(k)` | Main `decide(claim)` |
 | `ours = none` | Owner `deliver` |
-| 某条有效的失败结论还有未裁的发现 | Main `decide(findings)` |
-| owner 待修复项，或 `mergeable = no`，或 `checks = fail` 且当前失败的 run 不是最近引出过完结 `fix` 的 run | Owner `fix`，pin 为触发原因，按以下优先级取第一个：PR head 与 `submit` 的 head 不同（owner 推送了但还没回复）；被维持的发现所在的结论；`implDefect` 裁定；`checks` 的 `fixNeeded` 裁定；主会话的 designFix commit 未合入；该成员承载的设计 commit 未合入；冲突；失败的 check run |
+| 有效的不通过结论还没有裁定 | Main `decide(findings)` |
+| owner 待修复项，或 `mergeable = no`，或 `checks = fail` 且当前失败的 run 不是最近引出过完结 `fix` 的 run | Owner `fix`，pin 为触发原因，按以下优先级取第一个：PR head 与 `submit` 的 head 不同（owner 推送了但还没回复）；被维持的不通过结论；`implDefect` 裁定；`checks` 的 `fixNeeded` 裁定；主会话的 designFix commit 未合入；该成员承载的设计 commit 未合入；冲突；失败的 check run |
 | main 待修复项 | Main `designFix` |
 | `checks = fail`，当前失败的 run 已经引出过一次完结的 `fix` | Main `decide(checks)`，pin 为该 run 的 id |
 | review 不是 `valid` | Gate `review` |
@@ -140,7 +140,7 @@ gate 槽位的取代（`step` 执行）：
 
 **守卫**：可单独测试的不变量，作用于所有规则。
 
-- 有未决的主张、`materialized = pending`、有未裁的发现，或有任一类待修复项时：不给出 Gate 义务，也不给出 `merge`。
+- 有未决的主张、`materialized = pending`、有未裁定的不通过结论，或有任一类待修复项时：不给出 Gate 义务，也不给出 `merge`。
 - owner 自己的 `noCode`、`split` 或 `blocked` 主张未决时，它的义务照常存在，简报写明「等待裁定，可以 yield」，`yield` 拦截对这张票据放行；`question` 未决时，简报写明暂停依赖该点的部分。
 - 被守卫抑制的 Gate 义务不被任何席位持有。守卫解除后，同名义务重新出现，席位被唤醒或重派。
 
@@ -150,14 +150,14 @@ gate 槽位的取代（`step` 执行）：
 
 | 结论 | pin | 有效条件 |
 |---|---|---|
-| review | head、目标与 base、PR 正文哈希、成员正文哈希、改变契约的裁定、设计 commit、此前被驳回的发现 | 与当前逐字段相等，并且结论的 attempt 等于槽位 attempt；针对这条结论本身的裁定不让它失效 |
+| review | head、目标与 base、PR 正文哈希、成员正文哈希、改变契约的裁定、设计 commit、此前被驳回的结论 | 与当前逐字段相等，并且结论的 attempt 等于槽位 attempt；针对这条结论本身的裁定不让它失效 |
 | accept | head、目标与 base、成员正文哈希、改变契约的裁定、设计 commit | 同上 |
-| postMerge | 单元内全部成员的合并提交、各成员正文哈希、改变契约的裁定、设计 commit | 契约字段相等；每个交付目标 repo 各有一个观察到的提交，它必须包含该 repo 的全部合并提交。最新的合并发生在议程召集之后时，它还必须恰好是该 repo 中单元最新的合并提交（R5）；发生在召集之前时（遗留项），可以是更新的提交 |
-| closure | 全部成员的合并提交、parent 正文哈希、子 issue 集合及各自的终点事实、滞留设计义务的集合 | 契约字段相等；每个交付目标 repo 各有一个观察到的提交，并包含该 repo 的全部合并提交 |
+| postMerge | 单元内全部成员的合并提交、各成员正文哈希、改变契约的裁定、设计 commit | 同上。在哪个提交上验收由简报规定：召集之后的合并在该 repo 最新的合并提交上（R5），召集之前的遗留项在包含合并提交的默认分支 head 上 |
+| closure | 全部成员的合并提交、parent 正文哈希、子 issue 集合及各自的终点事实、滞留设计义务的集合 | 同上 |
 
 - 改变契约的裁定只有 `designGap` 与 `acceptanceMethod` 两类。
 - 有效结论完结它的 Gate 义务：通过和失败都算完结；失败引出的后续义务由规则另行给出。
-- 「通过」要求每一条验收行 id 都有一行判定为通过。
+- 结论只有通过（`ok`）或不通过，附席位写的理由。head、合并提交这些事实是票据的 pin，由程序盖入，席位不回报；验收行由席位按简报逐条核对，`ok` 表示全部通过。
 
 ### 单元验证阶段与议程收尾
 
@@ -167,7 +167,6 @@ gate 槽位的取代（`step` 执行）：
 |---|---|
 | 没有 `pending` 成员，至少一个成员 `delivered`，postMerge 槽位没有有效结论 | Gate `postMerge`，覆盖全部成员 |
 | postMerge 有效且失败 | Main `decide(postMergeFail)`：`correction`（附草稿）或 `reverify` |
-| 议程中任一有效结论列出了与本次无关的失败，而它的槽位里还没有 `unrelated` 裁定 | Main `decide(unrelated)`：附草稿，锚点为「不进议程」；不阻塞该单元 |
 | 设计 commit 不在默认分支上，没有可维护的 PR 包含它，承载者已不能承载 | Main `decide(orphanDesign)` |
 | 迁移来源尚未满足，而承担迁移的成员已经关闭 | Main `decide(migration)` |
 | parent 的某个子 issue 不在议程里，也没有已核实的终点事实 | Main `decide(agendaGap)` |
@@ -222,7 +221,7 @@ gate 槽位的取代（`step` 执行）：
 |---|---|---|---|
 | `PrSubmit` | owner | 成员的 `submit`（`applied` 置假，清除已处理的待修复项） | `deliver`、`fix` |
 | `Claim(question \| noCode \| split \| blocked)` | owner、reviewer、验收者 | 对应 context 的 `claim` | 不完结（中间型） |
-| `Verdict(review \| accept \| postMerge \| closure)` | Gate | 对应的 gate 槽位 | 对应的 Gate 义务 |
+| `Verdict(ok, note)` | Gate | 票据种类对应的 gate 槽位，由程序盖入 gate 与 pin | 对应的 Gate 义务 |
 | `Decision(subject, verdict, drafts?, bodyReplacements?)` | 主会话 | subject 对应的槽位；草稿与正文替换进入议程与契约 | 对应的 `decide`、`designFix`、`report`、`spawn`（`seated`）、`wake`（`woken`） |
 
 `Decision` 按 subject 划分变体，每个 subject 只接受自己的一组 verdict。完整的变体表见附件 [core.briefs.md](core.briefs.md)「Decision 变体」。其中改变状态中契约或结局的变体包括：
@@ -234,7 +233,7 @@ gate 槽位的取代（`step` 执行）：
 - 草稿 id 为 `(票据 id, 序号)`；锚点为 `before`、`after` 或 `correctionOf`。插在当前单元之前的草稿会成为新的当前单元。
 - 设计路线：
   - `defaultFirst(commit)`：commit 必须已在默认分支上。适用条件写在主会话的简报里，推送被拒时改选其他路线。
-  - `withPr(commit)`：commit 在设计分支上，承载者是提问的成员（发现所在结论的成员），由它合入。
+  - `withPr(commit)`：commit 在设计分支上，承载者是提问的成员（或被裁定结论所属的成员），由它合入。
   - `future(carrier, commit)`：承载者与 commit 同 repo，并位于当前单元之后。没有合适的承载者时，裁定必须附带设计承接项的草稿。
 
 ### 席位名
@@ -257,8 +256,8 @@ gate 槽位的取代（`step` 执行）：
   1. 已生效：状态里已是这条回复（席位回复在它的槽位里，主张在未决列表里，主会话的裁定是状态记录的最近一条），或效应结果已登记 → `Same`。
   2. 义务在当前推导结果里，否则拒绝为「已完结」或「无此票据」。唯一的例外是主会话主动提出的 `noCode`：目标必须是当前单元中结局为 `pending` 的成员。
   3. 调用者身份：`ctx.agent.id` 去掉后缀等于请求名，registry 中该 id 的会话就是调用者的会话，状态不是 aborted，并且调用者是该席位的持有者，或是待回执的 agent（子席位可能在主会话回执之前就完成工作）。主会话凭 `kind = main` 通过；效应结果只接受 adapter 自己。
-  4. 回复种类与 `Decision` 变体都可接受；`Decision` 指名的结论、事件、主题、席位或 agent 必须正好是这张票据的 pin；结论的 gate 必须与票据种类相同；主张所指的上下文必须是这张票据的上下文。不能借一张票据裁定、判定或主张另一件事。
-  5. 实时前提成立，例如：`PrSubmit` 的 head 等于远端 head，并且包含应合入的设计 commit；结论观察到的 head 或提交满足有效条件；结论的验收行 id 集合等于 issue 的验收行 id 集合。
+  4. 回复种类与 `Decision` 变体都可接受；`Decision` 指名的结论、事件、主题、席位或 agent 必须正好是这张票据的 pin；主张所指的上下文必须是这张票据的上下文。结论的 gate 就是票据的种类，席位不填写。不能借一张票据裁定、判定或主张另一件事。
+  5. 实时前提成立：`PrSubmit` 的 head 等于远端 head，并且包含应合入的设计 commit。结论只有通过或不通过，没有需要核对的事实。
   6. 由程序把 pin 盖入回复，按上表写进槽位并应用它带来的变化，得到 `state'`。`state'` 与 `state` 相等 → `Same`；否则 `Next(state')`，版本加一。
 
 ## 5 走查

@@ -86,8 +86,8 @@ describe("model checking (core.md §6.4)", () => {
       // replies: every reply variant the explored obligations admit
       "deliver: prSubmit(new head)", "fix: prSubmit(new head)", "fix: prSubmit(same head)",
       "deliver: claim(question)", "deliver: claim(noCode)", "deliver: claim(split)", "deliver: claim(blocked)",
-      "review: pass", "review: fail", "review: claim(question)", "accept: pass", "accept: fail", "accept: pass+unrelated",
-      "postMerge: pass", "postMerge: fail", "postMerge: claim(question)", "closure: pass", "closure: fail", "closure: claim(question)",
+      "review: ok", "review: not ok", "review: claim(question)", "accept: ok", "accept: not ok",
+      "postMerge: ok", "postMerge: not ok", "postMerge: claim(question)", "closure: ok", "closure: not ok", "closure: claim(question)",
       "decideClaim: answered", "decideClaim: outOfDomain", "decideClaim: implDefect", "decideClaim: designGap(withPr)", "decideClaim: acceptanceMethod",
       "decideClaim: confirmed", "decideClaim: refuted", "decideClaim: confirmed(before)", "decideClaim: confirmed(after)",
       "decideClaim: replacePr", "decideClaim: external",
@@ -96,7 +96,7 @@ describe("model checking (core.md §6.4)", () => {
       "decideChecks: rerun", "decideChecks: fixNeeded", "decideChecks: external",
       "decideReopened: restore", "decideReopened: correction", "decideClosed: confirmedNoCode", "decideClosed: reopen",
       "decidePostMergeFail: reverify", "decidePostMergeFail: correction", "decideClosureFail: reverify", "decideClosureFail: correction",
-      "decide:unrelated: unrelated", "decide:agendaGap: resolved", "decide:agendaGap: external",
+      "decide:agendaGap: resolved", "decide:agendaGap: external",
       "decideEffectFailed: retry", "decideEffectFailed: external", "decideStall: external", "report: summary",
       "spawn: seated", "wake: woken (receipt, then write agent://)", "wake: woken (receipt only)",
       // program effects, including failures and a result lost after the GitHub write

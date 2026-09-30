@@ -13,22 +13,17 @@ import type {
   DeliveryTarget,
   Draft,
   EventId,
-  Finding,
   FindingVerdict,
   Hash,
   IssueRef,
   Millis,
   ObligationId,
-  Observed,
   PrRef,
   ReplyId,
   RepoRef,
   Reply,
   Route,
-  RowResult,
   Sha,
-  UnrelatedFailure,
-  Verdict,
 } from "../core/index.ts";
 
 export type Parsed<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
@@ -266,63 +261,6 @@ function claim(value: unknown, path: string): Claim {
   }
 }
 
-function finding(value: unknown, path: string): Finding {
-  const o = record(value, path, ["id", "location", "consequence", "reproduction", "responsible"]);
-  return {
-    id: string(o.id, `${path}.id`),
-    location: string(o.location, `${path}.location`),
-    consequence: string(o.consequence, `${path}.consequence`),
-    reproduction: string(o.reproduction, `${path}.reproduction`),
-    responsible: choice(o.responsible, `${path}.responsible`, ["owner", "main"]),
-  };
-}
-
-function row(value: unknown, path: string): RowResult {
-  const o = record(value, path, ["rowId", "command", "output", "pass"]);
-  return { rowId: string(o.rowId, `${path}.rowId`), command: string(o.command, `${path}.command`), output: string(o.output, `${path}.output`), pass: boolean(o.pass, `${path}.pass`) };
-}
-
-function unrelated(value: unknown, path: string): UnrelatedFailure {
-  const o = record(value, path, ["description", "reproduction"]);
-  return { description: string(o.description, `${path}.description`), reproduction: string(o.reproduction, `${path}.reproduction`) };
-}
-
-function observed(value: unknown, path: string): Observed {
-  const o = record(value, path, ["repo", "commit"]);
-  return { repo: repo(o.repo, `${path}.repo`), commit: sha(o.commit, `${path}.commit`) };
-}
-
-function verdict(value: unknown, path: string): Verdict {
-  const o = record(value, path, ["gate", "observedHead", "gates", "findings", "rows", "unrelated", "observed"]);
-  const gate = choice(o.gate, `${path}.gate`, ["review", "accept", "postMerge", "closure"]);
-  switch (gate) {
-    case "review": {
-      record(value, path, ["gate", "observedHead", "gates", "findings"]);
-      const gates = o.gates;
-      if (!Array.isArray(gates) || gates.length !== 5) fail(`${path}.gates`, "expected five gate statuses");
-      const status = (index: number) => choice(gates[index], `${path}.gates[${index}]`, ["pass", "fail", "notRun"]);
-      return { gate, observedHead: sha(o.observedHead, `${path}.observedHead`), gates: [status(0), status(1), status(2), status(3), status(4)], findings: array(o.findings, `${path}.findings`, finding) };
-    }
-    case "accept":
-      record(value, path, ["gate", "observedHead", "rows", "findings", "unrelated"]);
-      return {
-        gate,
-        observedHead: sha(o.observedHead, `${path}.observedHead`),
-        rows: array(o.rows, `${path}.rows`, row),
-        findings: array(o.findings, `${path}.findings`, finding),
-        unrelated: array(o.unrelated, `${path}.unrelated`, unrelated),
-      };
-    case "postMerge":
-      record(value, path, ["gate", "observed", "rows", "unrelated"]);
-      return { gate, observed: array(o.observed, `${path}.observed`, observed), rows: array(o.rows, `${path}.rows`, row), unrelated: array(o.unrelated, `${path}.unrelated`, unrelated) };
-    case "closure":
-      record(value, path, ["gate", "observed", "rows"]);
-      return { gate, observed: array(o.observed, `${path}.observed`, observed), rows: array(o.rows, `${path}.rows`, row) };
-    default:
-      return assertNever(gate);
-  }
-}
-
 function findingVerdict(value: unknown, path: string): FindingVerdict {
   const o = record(value, path, ["kind", "responsible", "basis", "draft", "route"]);
   const kind = choice(o.kind, `${path}.kind`, ["upheld", "rejected", "outOfScope", "designGap", "acceptanceMethod"]);
@@ -347,11 +285,6 @@ function findingVerdict(value: unknown, path: string): FindingVerdict {
   }
 }
 
-function findingDecision(value: unknown, path: string): { readonly findingId: string; readonly verdict: FindingVerdict } {
-  const o = record(value, path, ["findingId", "verdict"]);
-  return { findingId: string(o.findingId, `${path}.findingId`), verdict: findingVerdict(o.verdict, `${path}.verdict`) };
-}
-
 function questionVerdict(value: unknown, path: string): Extract<Decision, { subject: "question" }>["verdict"] {
   const o = record(value, path, ["kind", "route"]);
   const kind = choice(o.kind, `${path}.kind`, ["answered", "outOfDomain", "implDefect", "acceptanceMethod", "designGap"]);
@@ -371,7 +304,7 @@ function questionVerdict(value: unknown, path: string): Extract<Decision, { subj
 }
 
 const DECISION_KEYS = [
-  "subject", "claim", "verdict", "affected", "member", "bodyHash", "verdictId", "perFinding", "event", "pr", "runId", "key",
+  "subject", "claim", "verdict", "affected", "member", "bodyHash", "verdictId", "event", "pr", "runId", "key",
   "effect", "failedAt", "commit", "summary", "reason", "requestName", "previous", "agentId", "parkedSince",
 ];
 
@@ -379,7 +312,7 @@ function decision(value: unknown, path: string): Decision {
   const o = record(value, path, DECISION_KEYS);
   const subject = choice(o.subject, `${path}.subject`, [
     "question", "noCodeClaim", "splitClaim", "blockedClaim", "findings", "closed", "reopened", "checks", "postMergeFail", "closureFail",
-    "unrelated", "orphanDesign", "migration", "agendaGap", "stall", "effectFailed", "designFix", "report", "noCode", "seated", "woken",
+    "orphanDesign", "migration", "agendaGap", "stall", "effectFailed", "designFix", "report", "noCode", "seated", "woken",
   ]);
   switch (subject) {
     case "question":
@@ -399,8 +332,8 @@ function decision(value: unknown, path: string): Decision {
       record(value, path, ["subject", "claim", "verdict"]);
       return { subject, claim: replyId(o.claim, `${path}.claim`), verdict: choice(o.verdict, `${path}.verdict`, ["replacePr", "external", "refuted"]) };
     case "findings":
-      record(value, path, ["subject", "verdictId", "perFinding"]);
-      return { subject, verdictId: replyId(o.verdictId, `${path}.verdictId`), perFinding: array(o.perFinding, `${path}.perFinding`, findingDecision) };
+      record(value, path, ["subject", "verdictId", "verdict"]);
+      return { subject, verdictId: replyId(o.verdictId, `${path}.verdictId`), verdict: findingVerdict(o.verdict, `${path}.verdict`) };
     case "closed":
       record(value, path, ["subject", "member", "event", "bodyHash", "verdict"]);
       return {
@@ -420,9 +353,6 @@ function decision(value: unknown, path: string): Decision {
     case "closureFail":
       record(value, path, ["subject", "verdictId", "verdict"]);
       return { subject, verdictId: replyId(o.verdictId, `${path}.verdictId`), verdict: choice(o.verdict, `${path}.verdict`, ["correction", "reverify"]) };
-    case "unrelated":
-      record(value, path, ["subject", "verdictId"]);
-      return { subject, verdictId: replyId(o.verdictId, `${path}.verdictId`) };
     case "orphanDesign":
     case "migration":
     case "agendaGap":
@@ -454,7 +384,7 @@ function decision(value: unknown, path: string): Decision {
 
 export function parseReply(ticket: unknown, reply: unknown): Parsed<Reply> {
   return parsed(() => {
-    const o = record(reply, "reply", ["kind", "branch", "head", "title", "body", "template", "retryNote", "claim", "verdict", "decision", "rationale", "drafts", "bodyReplacements"]);
+    const o = record(reply, "reply", ["kind", "branch", "head", "title", "body", "template", "retryNote", "claim", "ok", "note", "decision", "rationale", "drafts", "bodyReplacements"]);
     const kind = choice(o.kind, "reply.kind", ["prSubmit", "claim", "verdict", "decision"]);
     const ticketId = ticket === null ? null : obligation(ticket, "ticket");
     switch (kind) {
@@ -476,9 +406,9 @@ export function parseReply(ticket: unknown, reply: unknown): Parsed<Reply> {
         if (ticketId === null) fail("ticket", "obligation id required for claim");
         return { kind, obligation: ticketId, claim: claim(o.claim, "reply.claim") };
       case "verdict":
-        record(reply, "reply", ["kind", "verdict"]);
+        record(reply, "reply", ["kind", "ok", "note"]);
         if (ticketId === null) fail("ticket", "obligation id required for verdict");
-        return { kind, obligation: ticketId, verdict: verdict(o.verdict, "reply.verdict") };
+        return { kind, obligation: ticketId, ok: boolean(o.ok, "reply.ok"), note: string(o.note, "reply.note") };
       case "decision": {
         record(reply, "reply", ["kind", "decision", "rationale", "drafts", "bodyReplacements"]);
         const d = decision(o.decision, "reply.decision");

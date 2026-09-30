@@ -30,7 +30,7 @@ export interface SeatBinding {
   readonly role: SeatRole;
   readonly requestName: string;
   readonly workDir: string;
-  readonly agent: "task:high" | "task:mid";
+  readonly agent: string;
 }
 
 export interface Obligation {
@@ -102,7 +102,7 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
           if (id === null) break;
           const owner = sp.holder === "owner";
           const seat: SeatBinding | undefined = owner
-            ? { role: "owner", requestName: w.names.owner, workDir: workDir(w.entry.issue, w.names.owner), agent: "task:high" }
+            ? { role: "owner", requestName: w.names.owner, workDir: workDir(w.entry.issue, w.names.owner), agent: policy.seatAgents.owner }
             : undefined;
           if (owner) needed.add(w.names.owner);
           out.push({
@@ -129,7 +129,7 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
           const name = sp.kind === "review" ? w.names.review : w.names.accept;
           if (id === null || name === null) break;
           needed.add(name);
-          const seat: SeatBinding = { role: sp.kind, requestName: name, workDir: workDir(w.entry.issue, name), agent: "task:mid" };
+          const seat: SeatBinding = { role: sp.kind, requestName: name, workDir: workDir(w.entry.issue, name), agent: policy.seatAgents.gate };
           out.push({ ...base(id, sp.kind, "gate", ctx, { kind: sp.kind, member: w }, { seat }), accepts: ["verdict", "claim"] });
           break;
         }
@@ -177,7 +177,7 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
           needed.add(w.name);
           out.push({
             ...base(w.ids.postMerge, sp.kind, "gate", ctx, { kind: "postMerge", verification: w }, {
-              seat: { role: "postMerge", requestName: w.name, workDir: workDir(w.unit.top.issue, w.name), agent: "task:mid" },
+              seat: { role: "postMerge", requestName: w.name, workDir: workDir(w.unit.top.issue, w.name), agent: policy.seatAgents.gate },
             }),
             accepts: ["verdict", "claim"],
           });
@@ -205,7 +205,7 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
             needed.add(w.name);
             out.push({
               ...base(w.ids.closure, sp.kind, "gate", "closure", { kind: "closure", closure: w }, {
-                seat: { role: "closure", requestName: w.name, workDir: workDir(w.parent, w.name), agent: "task:mid" },
+                seat: { role: "closure", requestName: w.name, workDir: workDir(w.parent, w.name), agent: policy.seatAgents.gate },
               }),
               accepts: ["verdict", "claim"],
             });
@@ -270,6 +270,7 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
             seat: seat.w,
             acknowledgeOnly,
             pending: seat.w.pending,
+            agent: out.find((o) => o.seat?.requestName === seat.w.requestName)?.seat?.agent ?? null,
             assignment: out.find((o) => o.seat?.requestName === seat.w.requestName)?.brief ?? null,
           }),
         );

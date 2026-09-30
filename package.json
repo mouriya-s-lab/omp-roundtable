@@ -20,6 +20,18 @@
         "type": "string",
         "description": "Directory of the agenda state files (<dataDir>/state). Default: <agent dir>/omp-roundtable.",
         "env": "OMP_ROUNDTABLE_DIR"
+      },
+      "ownerAgent": {
+        "type": "string",
+        "description": "Agent type owner seats are spawned as (R2).",
+        "default": "task:high",
+        "env": "OMP_ROUNDTABLE_OWNER_AGENT"
+      },
+      "gateAgent": {
+        "type": "string",
+        "description": "Agent type review, accept, postMerge and closure seats are spawned as (R3).",
+        "default": "task:mid",
+        "env": "OMP_ROUNDTABLE_GATE_AGENT"
       }
     }
   },

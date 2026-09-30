@@ -32,12 +32,12 @@
 | 票据 | 必须包含 |
 |---|---|
 | `deliver`、`fix` | 交付目标（repo、base、起点 SHA）；要接管或沿用的 PR 与分支；需要合入的设计 commit；需要通读的 issue 与设计章节。PR 正文按 `writing-pr` 选模板：纯文档 PR 用思路要点模板；其他 PR 用四层证据，Layer 2 读回关键行，Layer 4 逐条经真实入口观察正负路径，测试计数只放卫生检查。`fix` 另附触发原因，以及引出它的结论或裁定原文。续作时写明：先检查工作目录里未推送的提交；推送被拒时不强推，改为回复 `Claim(blocked)`。自己的主张在等待裁定期间，可以 `yield` |
-| review | PR、HEAD、base。按 `review-pr` 依次跑 Gate 1–5，首个失败即停。以 issue 契约为准，不扩大范围；不派审查子代理。此前被驳回、且没有新证据的发现不再提出。落在主会话 commit 上的发现，责任人写为主会话 |
+| review | PR、HEAD、base。按 `review-pr` 依次跑 Gate 1–5，首个失败即停。以 issue 契约为准，不扩大范围；不派审查子代理。此前被驳回、且没有新证据的问题不再提出。问题落在主会话的 commit 上时，在理由里写明 |
 | accept | 在干净的 detached checkout 上确认 HEAD。经真实入口逐条观察验收行的正负路径：纯库在仓库外自写 driver；CLI 用真实命令；Web 走 `skill://agent-browser`；纯文档核对文档间的语义。不复用作者的 driver 与测试，最后跑 repo 校验，不改 repo |
-| postMerge | 对每个交付目标 repo 分别执行。最新的合并发生在议程召集之后时，在该合并提交的干净 checkout 上执行（R5）；发生在召集之前时（遗留项），在当前默认分支 head 的干净 checkout 上执行，该 head 必须包含合并提交。部署型 repo 在 repo 交付规则规定的目标环境里执行。经真实入口逐条观察覆盖成员的验收行，并跑 repo 校验。与本次无关的失败单列，写明为什么无关 |
+| postMerge | 对每个交付目标 repo 分别执行。最新的合并发生在议程召集之后时，在该合并提交的干净 checkout 上执行（R5）；发生在召集之前时（遗留项），在当前默认分支 head 的干净 checkout 上执行，该 head 必须包含合并提交。部署型 repo 在 repo 交付规则规定的目标环境里执行。经真实入口逐条观察覆盖成员的验收行，并跑 repo 校验。与本次无关的失败写在理由里，写明为什么无关 |
 | closure | 对每个交付目标 repo，在包含该 repo 全部合并提交的默认分支 head 上，经真实入口逐行核对 parent 的关闭验证，并核对每个子 issue 的终点事实 |
 | Main `decide(*)` | subject 对应的回复原文与证据；该 subject 可选的 verdict 及各自的后果；需要替换的正文段落及其当前哈希。设计路线的适用条件：`defaultFirst` 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒时改选其他路线；`future` 需要同 repo 的后续承载者，没有就附设计承接项的草稿 |
-| Main `spawn` | 先执行，再回执。registry 中已有请求名匹配、而且不是状态里记录的持有者的可用 agent 时，直接回执；否则用原生 `task` 派出，参数为：`agent`、`isolated: true`、`name` 取请求名、assignment 取简报。前提：宿主设置 `async.enabled` 为真，并且该 agent 类型没有声明 `blocking: true`，否则主会话会同步等待子席位，席位提问时就会死锁。派出后用 `Decision(seated{agentId})` 回执，agentId 取 `task` 返回的实际 id |
+| Main `spawn` | 先执行，再回执。registry 中已有请求名匹配、而且不是状态里记录的持有者的可用 agent 时，直接回执；否则用原生 `task` 派出，参数为：`agent`（设置给出的席位 agent 类型：owner 默认 `task:high`，gate 默认 `task:mid`）、`isolated: true`、`name` 取请求名、assignment 取简报。前提：宿主设置 `async.enabled` 为真，并且该 agent 类型没有声明 `blocking: true`，否则主会话会同步等待子席位，席位提问时就会死锁。派出后用 `Decision(seated{agentId})` 回执，agentId 取 `task` 返回的实际 id |
 | Main `wake` | 先回执，再执行：先回复 `Decision(woken{agentId})`，再用原生 `write agent://<实际 id>` 唤醒 |
 | Main `report` | 每项的结局，以及 PR 与 issue 的链接、各验收结论的要点；树关闭的结论；意外写回主会话工作 checkout 的路径。报告由主会话在对话里交给操作员，不写到 GitHub |
 | 所有主会话简报 | 圆桌是唯一的协议渠道。子席位 `yield` 时的文字会作为原生消息送达主会话，但它不是回复，不据此行动 |
@@ -49,9 +49,7 @@
 | `PrSubmit` | 分支、观察到的 head、标题、正文、PR 模板类型；非首次提交时加重试说明 | 远端分支 head 等于观察到的 head；base 等于交付目标；head 包含应合入的设计 commit |
 | `Claim(question)` | 最小复现（`path: bytes`）、两种读法及各自的权威出处、最早缺信息的环节、建议 | — |
 | `Claim(noCode \| split \| blocked)` | 证据；拆分提案；阻塞类别与已尝试的途径 | — |
-| `Verdict(review)` | 观察到的 head；Gate 1–5 各自的状态；首个失败项；每个发现给出 `file:line`、可观察后果、复现命令、责任人 | 观察到的 head 等于 pin |
-| `Verdict(accept \| postMerge)` | 观察到的 head 或提交；每条验收行 id 对应的命令或操作、实际输出与判定；未覆盖项及原因；无关失败 | 观察到的提交满足有效条件；验收行 id 集合等于 issue 的验收行 id 集合，并且没有重复 |
-| `Verdict(closure)` | 观察到的提交；parent 关闭验证每一行的结果；每个子 issue 的终点事实 | 行 id 集合等于 parent 关闭验证的行集合 |
+| `Verdict` | `ok`（通过或不通过）；`note`：理由，不通过时写清问题、位置与复现方式。gate 席位只回复这两项；accept、postMerge 与 closure 的 `ok` 表示每一条验收行都通过 | 无；gate 取自票据种类，head、合并提交等事实是票据的 pin |
 | `Decision` | subject、verdict，以及该变体要求的字段（见下表） | verdict 属于该 subject；设计路线满足适用条件；正文替换的基准哈希等于当前哈希 |
 
 所有回复里的输入清单都由程序按 pin 盖入，席位不填写。
@@ -63,7 +61,7 @@
 | `claim(question)` | `answered`、`outOfDomain`、`implDefect`（产生 owner 待修复项）、`designGap(route)`、`acceptanceMethod`（须附正文替换，对象是问题所涉验收行所在的 issue：成员 context 为该成员，单元验收为该单元的成员之一，树关闭为 parent） |
 | `claim(noCode)`、`claim(split)` | `confirmed`、`refuted` |
 | `claim(blocked)` | `replacePr`、`external`、`refuted` |
-| `findings` | 对每个发现分别裁定：`upheld(owner \| main)`、`rejected`、`outOfScope`（附草稿）、`designGap(route)`、`acceptanceMethod`（须附对该成员的正文替换） |
+| `findings` | 对这条不通过的结论给出一个裁定：`upheld(owner \| main)`、`rejected`、`outOfScope`（附草稿）、`designGap(route)`、`acceptanceMethod`（须附对该成员的正文替换） |
 | `closed` | `confirmedNoCode`、`reopen` |
 | `reopened` | `restore`、`correction`（附草稿）、`reopenAccepted` |
 | `checks` | `rerun`、`fixNeeded`、`external` |

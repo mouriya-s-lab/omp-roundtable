@@ -21,15 +21,15 @@
 2. 在 h' 上重新给出 gate 票据。pin 不同，请求名也不同，因此由新席位执行。
 3. 旧席位不再持有票据。它如果仍提交结论，`step` 在第 2 步拒绝。
 
-## W3 review 失败：部分发现维持，部分驳回
+## W3 review 不通过，裁定维持
 
-1. 结论为 `valid(fail)`，发现尚未裁定 → Main `decide(findings)`。守卫抑制 gate。
-2. 裁定：f1 为 `upheld(owner)`，f2 为 `rejected`。这些裁定针对的是这条结论本身，不会让它失效 → 出现 owner 待修复项 → Owner `fix`，pin 为 `(h, 结论 id)`。
-3. owner 推送 h' 并回复 `PrSubmit` → 旧结论变为 `stale`，待修复项随之消失 → 在 h' 上重新给出 review 与 accept。review 的清单带上「f2 已被驳回」。
+1. reviewer 回复不通过（`ok = false`，理由写在 note）→ 结论为 `valid(fail)`，尚未裁定 → Main `decide(findings)`。守卫抑制 gate。
+2. 裁定 `upheld(owner)`。裁定针对的是这条结论本身，不会让它失效 → 出现 owner 待修复项 → Owner `fix`，pin 为 `(h, 结论 id)`，简报附结论的理由。
+3. owner 推送 h' 并回复 `PrSubmit` → 旧结论变为 `stale`，待修复项随之消失 → 在 h' 上重新给出 review 与 accept。
 
-## W4 发现全部被驳回或判为范围外
+## W4 不通过的结论被驳回或判为范围外
 
-review 或 accept 的失败结论，发现全部为 `rejected` 或 `outOfScope` 时算作一次取代事件 → attempt + 1 → 请求名变为 `-a2` → 由新席位重做这一次 gate。`outOfScope` 的发现另由草稿开新 issue。
+review 或 accept 的不通过结论被裁定为 `rejected` 或 `outOfScope` 时算作一次取代事件 → attempt + 1 → 请求名变为 `-a2` → 由新席位重做这一次 gate。被驳回的 review 结论进入之后 review 的清单；`outOfScope` 另由草稿开新 issue。
 
 ## W4b 本议程的 PR 被放弃后重新交付
 
@@ -39,7 +39,7 @@ review 或 accept 的失败结论，发现全部为 `rejected` 或 `outOfScope` 
 
 ## W5 只改证据的修复
 
-1. 发现是缺少证据，裁定为 `upheld(owner)` → `fix`。
+1. 不通过的理由是缺少证据，裁定为 `upheld(owner)` → `fix`。
 2. owner 用同一个 h 回复 `PrSubmit` → `updatePr` 完成之前 `materialized = pending`；完成后 PR 正文哈希变化 → review 变为 `stale` → 给出新的 `review`。
 3. accept 的清单不含 PR 正文，所以 accept 结论仍然有效。
 

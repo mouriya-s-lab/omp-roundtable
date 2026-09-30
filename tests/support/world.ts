@@ -17,7 +17,6 @@ import type {
   EffectResult,
   EventId,
   Facts,
-  Finding,
   FindingVerdict,
   Hash,
   Host,
@@ -28,19 +27,17 @@ import type {
   Millis,
   Obligation,
   ObligationId,
-  Observed,
   Policy,
   PrFact,
   Reply,
   RepoRef,
   Sha,
-  Verdict,
 } from "../../src/core/index.ts";
 import type { Classified } from "../../src/core/classify.ts";
 import { MEMBER_STALLS } from "./stalls.ts";
 
 export const repo: RepoRef = { owner: "lab", name: "sandbox" };
-export const policy: Policy = { appendSystem: "APPEND", systemBlocks: "BLOCKS" };
+export const policy: Policy = { appendSystem: "APPEND", systemBlocks: "BLOCKS", seatAgents: { owner: "task:high", gate: "task:mid" } };
 export const issueRef = (n: number): IssueRef => ({ repo, number: n });
 export const sha = (s: string): Sha => s as Sha;
 export const hash = (s: string): Hash => s as Hash;
@@ -84,7 +81,6 @@ export function issue(n: number, over: Partial<IssueFact> = {}): IssueFact {
     open: true,
     events: [],
     bodyHash: hash(`body-${n}`),
-    acceptanceRows: [`${repo.owner}/${repo.name}#${n}/r1`],
     children: [],
     ...over,
   };
@@ -102,7 +98,7 @@ export function initialWorld(spec: AgendaSpec): World {
   const members = spec.members.map((n) => issue(n));
   const outside = spec.outsideChild ? [issue(90)] : [];
   const parent =
-    spec.parent === null ? [] : [issue(spec.parent, { children: [...spec.members.map(issueRef), ...outside.map((i) => i.ref)], acceptanceRows: [`${repo.owner}/${repo.name}#${spec.parent}/c1`] }), ...outside];
+    spec.parent === null ? [] : [issue(spec.parent, { children: [...spec.members.map(issueRef), ...outside.map((i) => i.ref)] }), ...outside];
   const state = convene(
     "agenda-1" as AgendaId,
     ms(1000),
@@ -429,9 +425,8 @@ function mainEdges(w: World, c: Classified, ob: Obligation): [string, Stepped | 
     case "decideFindings": {
       const v = m?.w.unadjudicated ?? null;
       if (v === null || m === null) break;
-      const findings: readonly Finding[] = v.verdict.gate === "review" || v.verdict.gate === "accept" ? v.verdict.findings : [];
       const member = m.w.entry.issue;
-      const each = (fv: FindingVerdict): Decision => ({ subject: "findings", verdictId: v.id, perFinding: findings.map((f) => ({ findingId: f.id, verdict: fv })) });
+      const each = (fv: FindingVerdict): Decision => ({ subject: "findings", verdictId: v.id, verdict: fv });
       add("upheld(owner)", decision(w, ob, each({ kind: "upheld", responsible: "owner" })));
       add("upheld(main)", decision(w, ob, each({ kind: "upheld", responsible: "main" })));
       add("rejected", decision(w, ob, each({ kind: "rejected", basis: "b" })));
@@ -485,15 +480,13 @@ function mainEdges(w: World, c: Classified, ob: Obligation): [string, Stepped | 
       }
       break;
     }
-    case "decide:unrelated":
     case "decide:orphanDesign":
     case "decide:migration":
     case "decide:agendaGap": {
       const sub = c.subjects.find((s) => s.w.id === ob.id);
       if (sub === undefined) break;
       const sw = sub.w;
-      if (sw.subject === "unrelated") add("unrelated", decision(w, ob, { subject: "unrelated", verdictId: sw.verdictId }, [draft({ kind: "outsideAgenda" })]));
-      else for (const verdict of ["resolved", "external"] as const) add(verdict, decision(w, ob, { subject: sw.subject, key: sw.key, verdict }));
+      for (const verdict of ["resolved", "external"] as const) add(verdict, decision(w, ob, { subject: sw.subject, key: sw.key, verdict }));
       break;
     }
     case "decideEffectFailed": {
@@ -613,65 +606,24 @@ function ownerEdges(w: World, c: Classified, ob: Obligation, caller: Caller): [s
 
 function gateEdges(w: World, c: Classified, ob: Obligation, caller: Caller): [string, Stepped | null][] {
   const out: [string, Stepped | null][] = [];
-  const verdict = (label: string, v: Verdict, failing: boolean): void => {
-    const base = failing ? spend(w, "fail") : w;
-    out.push([`${ob.kind}: ${label}`, base === null ? null : reply(base, caller, { kind: "verdict", obligation: ob.id, verdict: v })]);
-  };
-  const finding: Finding = { id: "f1", location: "a.ts:1", consequence: "c", reproduction: "r", responsible: "owner" };
-  const rows = (ids: readonly string[], pass: boolean) => ids.map((rowId) => ({ rowId, command: "c", output: "o", pass }));
   const question = (context: Extract<Claim, { kind: "question" }>["context"]): Claim => ({ kind: "question", context, reproduction: "p", readings: ["a", "b"], earliestGap: "g", proposal: "x" });
-  switch (ob.kind) {
-    case "review":
-    case "accept": {
-      const m = c.member;
-      if (m === null || m.w.pr === null) break;
-      const head = m.w.pr.head;
-      const rowIds = m.w.issue?.acceptanceRows ?? [];
-      if (ob.kind === "review") {
-        verdict("pass", { gate: "review", observedHead: head, gates: ["pass", "pass", "pass", "pass", "pass"], findings: [] }, false);
-        verdict("fail", { gate: "review", observedHead: head, gates: ["pass", "fail", "notRun", "notRun", "notRun"], findings: [finding] }, true);
-      } else {
-        verdict("pass", { gate: "accept", observedHead: head, rows: rows(rowIds, true), findings: [], unrelated: [] }, false);
-        verdict("pass+unrelated", { gate: "accept", observedHead: head, rows: rows(rowIds, true), findings: [], unrelated: [{ description: "u", reproduction: "r" }] }, true);
-        verdict("fail", { gate: "accept", observedHead: head, rows: rows(rowIds, false), findings: [finding], unrelated: [] }, true);
-      }
-      out.push([`${ob.kind}: claim(question)`, claimEdge(w, ob, caller, question({ kind: "member", member: m.w.entry.issue }))]);
-      break;
-    }
-    case "postMerge": {
-      const v = c.verification;
-      if (v === null || v.w.manifest.gate !== "postMerge") break;
-      // one observed commit per delivery repo: the latest merge (core.md §3 有效性, R5); merges are in unit order
-      const mergedAt = (commit: Sha): number => {
-        const st = w.facts.prs.find((p) => p.state.kind === "merged" && p.state.mergeSha === commit)?.state;
-        return st !== undefined && st.kind === "merged" ? st.mergedAt : -1;
-      };
-      const latest = new Map<string, Observed>();
-      for (const mm of v.w.manifest.merges) {
-        const k = `${mm.repo.owner}/${mm.repo.name}`;
-        const cur = latest.get(k);
-        if (cur === undefined || mergedAt(mm.commit) > mergedAt(cur.commit)) latest.set(k, mm);
-      }
-      const observed = [...latest.values()];
-      const rowIds = v.w.unit.members.flatMap((mm) => w.facts.issues.find((i) => sameRef(i.ref, mm.issue))?.acceptanceRows ?? []);
-      verdict("pass", { gate: "postMerge", observed, rows: rows(rowIds, true), unrelated: [] }, false);
-      verdict("fail", { gate: "postMerge", observed, rows: rows(rowIds, false), unrelated: [] }, true);
-      out.push([`${ob.kind}: claim(question)`, claimEdge(w, ob, caller, question({ kind: "unitVerification", unit: v.w.unit.top.issue }))]);
-      break;
-    }
-    case "closure": {
-      const cm = c.closure.w.manifest;
-      if (cm === null || cm.gate !== "closure" || c.closure.w.parent === null) break;
-      const parentRef = c.closure.w.parent;
-      const rowIds = w.facts.issues.find((i) => sameRef(i.ref, parentRef))?.acceptanceRows ?? [];
-      verdict("pass", { gate: "closure", observed: cm.merges, rows: rows(rowIds, true) }, false);
-      verdict("fail", { gate: "closure", observed: cm.merges, rows: rows(rowIds, false) }, true);
-      out.push([`${ob.kind}: claim(question)`, claimEdge(w, ob, caller, question({ kind: "agendaClosure" }))]);
-      break;
-    }
-    default:
-      throw new Error(`model: no gate edges for obligation kind ${ob.kind}`);
-  }
+  const context: Extract<Claim, { kind: "question" }>["context"] | null =
+    ob.kind === "review" || ob.kind === "accept"
+      ? c.member === null
+        ? null
+        : { kind: "member", member: c.member.w.entry.issue }
+      : ob.kind === "postMerge"
+        ? c.verification === null
+          ? null
+          : { kind: "unitVerification", unit: c.verification.w.unit.top.issue }
+        : ob.kind === "closure"
+          ? { kind: "agendaClosure" }
+          : null;
+  if (context === null) throw new Error(`model: no gate edges for obligation kind ${ob.kind}`);
+  out.push([`${ob.kind}: ok`, reply(w, caller, { kind: "verdict", obligation: ob.id, ok: true, note: "ok" })]);
+  const failing = spend(w, "fail");
+  out.push([`${ob.kind}: not ok`, failing === null ? null : reply(failing, caller, { kind: "verdict", obligation: ob.id, ok: false, note: "a.ts:1 breaks" })]);
+  out.push([`${ob.kind}: claim(question)`, claimEdge(w, ob, caller, question(context))]);
   return out;
 }
 

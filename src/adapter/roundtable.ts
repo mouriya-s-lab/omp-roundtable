@@ -32,7 +32,7 @@ import {
   type StepEvent,
   type Transition,
 } from "../core/index.ts";
-import type { CommitPair, Store, StoreError } from "../store/index.ts";
+import type { Store, StoreError } from "../store/index.ts";
 import { callerOf, idleSubagents, readAgents, spawnPremise } from "./host.ts";
 import { parseConvene, parseReply, parseResume } from "./parse.ts";
 import { readPolicy } from "./policy.ts";
@@ -68,6 +68,8 @@ export class Roundtable {
   #systemPrompt: readonly string[] = [];
   #queue: Promise<unknown> = Promise.resolve();
   #queuedRound: Promise<Round> | null = null;
+  /** Roundtable mode of the main session, entered with `/roundtable`: the port tool is visible only in this mode. */
+  #mode = false;
 
   constructor(deps: { readonly store: Store; readonly settings: Settings; readonly appendSystemPath: string }) {
     this.#store = deps.store;
@@ -77,6 +79,25 @@ export class Roundtable {
 
   get recomputeIntervalMs(): number {
     return this.#settings.recomputeIntervalMs;
+  }
+
+  // ------------------------------------------------------------------ mode (port tool visibility)
+
+  get mode(): boolean {
+    return this.#mode;
+  }
+
+  /** Leaving the mode is refused while an agenda is driven: its main tickets would become unanswerable. */
+  setMode(on: boolean): string | null {
+    if (!on && this.#active !== null) return `议程 ${this.#active} 正在推进，不能退出圆桌模式。`;
+    this.#mode = on;
+    return null;
+  }
+
+  /** Whether a session sees the port tool: main in roundtable mode; a subagent that is a seat of the driven agenda. */
+  sees(ctx: ExtensionContext): boolean {
+    if (ctx.agent.kind === "main") return this.#mode;
+    return this.#active !== null && readAgents().some((a) => a.id === ctx.agent.id && a.requestName.startsWith("rt-"));
   }
 
   // ------------------------------------------------------------------ bindings and host observations
@@ -101,7 +122,7 @@ export class Roundtable {
   }
 
   #policy() {
-    return readPolicy(this.#appendSystemPath, this.#systemPrompt);
+    return readPolicy(this.#appendSystemPath, this.#systemPrompt, this.#settings.seatAgents);
   }
 
   // ------------------------------------------------------------------ tickets held by a caller
@@ -327,7 +348,7 @@ export class Roundtable {
     if (ctx.agent.kind !== "main") return { ok: false, text: "只有主会话可以召集议程。" };
     const parsed = parseConvene(input);
     if (!parsed.ok) return { ok: false, text: parsed.error };
-    const refusal = await spawnPremise(ctx);
+    const refusal = await spawnPremise(ctx, this.#settings.seatAgents);
     if (refusal !== null) return { ok: false, text: refusal };
     const { mode, parent, entries } = parsed.value;
     if (mode === "plan") {
@@ -353,7 +374,7 @@ export class Roundtable {
     if (ctx.agent.kind !== "main") return { ok: false, text: "只有主会话可以恢复议程。" };
     const parsed = parseResume(input);
     if (!parsed.ok) return { ok: false, text: parsed.error };
-    const refusal = await spawnPremise(ctx);
+    const refusal = await spawnPremise(ctx, this.#settings.seatAgents);
     if (refusal !== null) return { ok: false, text: refusal };
     return this.#serial(async () => {
       if (this.#active !== null) return { ok: false, text: `本进程已在推进议程 ${this.#active}。` };
@@ -395,10 +416,10 @@ export class Roundtable {
       if (!read.ok) return { ok: false, text: `读取 GitHub 失败（${read.error.kind}：${read.error.detail}）；回复没有生效，稍后重发同一回复。` };
       const host = this.#host();
       const policy = this.#policy();
-      const inputs = await this.#replyInputs(state, read.value, host, reply);
+      const inputs = await this.#live(state, read.value, host, reply);
       if (!inputs.ok) return { ok: false, text: inputs.text };
       const event: StepEvent = { kind: "reply", caller, reply, live: inputs.live, at: Date.now() as Millis };
-      const t = step(state, inputs.facts, host, policy, event);
+      const t = step(state, read.value, host, policy, event);
       switch (t.kind) {
         case "rejected":
           return { ok: false, text: `圆桌拒绝了这条回复：${t.reason}` };
@@ -423,27 +444,15 @@ export class Roundtable {
     });
   }
 
-  /** Live facts a reply is checked against: a PrSubmit's branch, a postMerge verdict's observed commits. */
-  async #replyInputs(state: AgendaState, facts: Facts, host: Host, reply: Reply): Promise<{ ok: true; facts: Facts; live: LiveFacts } | { ok: false; text: string }> {
+  /** Live facts a PrSubmit is checked against: its branch head and the design commits that head contains. */
+  async #live(state: AgendaState, facts: Facts, host: Host, reply: Reply): Promise<{ ok: true; live: LiveFacts } | { ok: false; text: string }> {
     const none: LiveFacts = { branchHead: null, branchContains: [] };
-    const c = derive(state, facts, host, this.#policy()).classified;
-    if (reply.kind === "prSubmit") {
-      const member = c.member;
-      if (member === null) return { ok: true, facts, live: none };
-      const live = await this.#store.live(member.w.entry.target.repo, reply.branch, member.w.designCommits);
-      if (!live.ok) return { ok: false, text: `读取分支 ${reply.branch} 的实时事实失败（${live.error.kind}：${live.error.detail}）；稍后重发同一回复。` };
-      return { ok: true, facts, live: live.value };
-    }
-    if (reply.kind === "verdict" && reply.verdict.gate === "postMerge" && c.verification !== null && c.verification.w.manifest.gate === "postMerge") {
-      const merges = c.verification.w.manifest.merges;
-      const pairs: CommitPair[] = reply.verdict.observed.flatMap((o) =>
-        merges.filter((m) => m.repo.owner === o.repo.owner && m.repo.name === o.repo.name).map((m) => ({ repo: m.repo, ancestor: m.commit, descendant: o.commit })),
-      );
-      const held = await this.#store.contained(pairs);
-      if (!held.ok) return { ok: false, text: `读取提交包含关系失败（${held.error.kind}：${held.error.detail}）；稍后重发同一回复。` };
-      return { ok: true, facts: { ...facts, commits: { ...facts.commits, contains: [...facts.commits.contains, ...held.value] } }, live: none };
-    }
-    return { ok: true, facts, live: none };
+    if (reply.kind !== "prSubmit") return { ok: true, live: none };
+    const member = derive(state, facts, host, this.#policy()).classified.member;
+    if (member === null) return { ok: true, live: none };
+    const live = await this.#store.live(member.w.entry.target.repo, reply.branch, member.w.designCommits);
+    if (!live.ok) return { ok: false, text: `读取分支 ${reply.branch} 的实时事实失败（${live.error.kind}：${live.error.detail}）；稍后重发同一回复。` };
+    return { ok: true, live: live.value };
   }
 }
 

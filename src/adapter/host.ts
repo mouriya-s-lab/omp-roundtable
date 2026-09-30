@@ -56,20 +56,17 @@ export function callerOf(ctx: ExtensionContext): Caller {
   return { kind: "sub", agentId: ctx.agent.id as AgentId, sessionMatches: ref?.session?.sessionManager === ctx.sessionManager };
 }
 
-/** Agent types seat requests name (core `SeatBinding.agent`). */
-const SEAT_AGENT_TYPES = ["task:high", "task:mid"] as const;
-
 /**
  * Spawn premise (design「派出的前提」): the main session's `task` must run asynchronously — host setting `async.enabled`
- * — and no seat agent type may declare `blocking: true`. Returns the refusal reason.
+ * — and neither configured seat agent type may declare `blocking: true`. Returns the refusal reason.
  */
-export async function spawnPremise(ctx: ExtensionContext): Promise<string | null> {
+export async function spawnPremise(ctx: ExtensionContext, seatAgents: { readonly owner: string; readonly gate: string }): Promise<string | null> {
   const session = AgentRegistry.global().get(ctx.agent.id)?.session ?? null;
   if (session === null) return `无法读取主会话 ${ctx.agent.id} 的设置，不能确认异步 task 已开启。`;
   if (!cfgAsyncEnabled.get(session))
     return "召集被拒绝：需要开启异步 task（宿主设置 async.enabled 当前为 false）。否则主会话派出席位后会同步等待，子席位一提问就会死锁。请在配置里设 async.enabled: true 后重新召集。";
   const { agents } = await discoverAgents(ctx.cwd);
-  for (const type of SEAT_AGENT_TYPES) {
+  for (const type of new Set([seatAgents.owner, seatAgents.gate])) {
     const def = agents.find((a) => a.name === type);
     if (def === undefined) return `召集被拒绝：找不到席位所需的 agent 类型 ${type}。`;
     if (def.blocking === true) return `召集被拒绝：agent 类型 ${type} 声明了 blocking: true，派出时主会话会同步等待，席位提问时会死锁。`;
