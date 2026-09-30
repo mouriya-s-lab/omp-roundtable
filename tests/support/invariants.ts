@@ -42,6 +42,17 @@ export const invariants: readonly { readonly name: string; readonly check: Invar
     name: "no merge on stale or invalid gates",
     check: (n, d) => mergeViolation(n.world, d),
   },
+  {
+    // An agenda neither done nor waiting on the outside must have someone who acts: the main session, the program, or a
+    // live seat. A ticket held only by a parked seat nobody wakes is a silent stall (the acked-but-unexecuted wake).
+    name: "progress: an open agenda always has an actor",
+    check: (_n, d) => {
+      if (d.done || d.waiting) return null;
+      const live = new Set(d.classified.seats.filter((s) => s.state === "live").map((s) => s.w.requestName));
+      const acts = d.obligations.some((o) => o.holder === "main" || o.holder === "program" || (o.seat !== null && live.has(o.seat.requestName)));
+      return acts ? null : `no actor for ${d.obligations.map((o) => `${o.kind}/${o.holder}`).join(",")}`;
+    },
+  },
 ];
 
 /** Checked on concrete facts and the state's gate slots, independent of classify's gate evaluation. */

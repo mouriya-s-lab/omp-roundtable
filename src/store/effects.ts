@@ -2,7 +2,7 @@
 // it should run: it checks the source first and writes only what is missing. An effect with a result returns it for
 // the adapter to write back through `step`; a source fact contradicting the write's premise is a `precondition` error.
 
-import { bodyHash, type AgendaState, type EffectResult, type EffectTarget, type IssueRef, type PrRef, type ProgramAction, type Sha, type SubmitState } from "../core/index.ts";
+import { bodyHash, type AgendaState, type EffectResult, type EffectTarget, type IssueRef, type PrRef, type Sha, type StoreAction, type SubmitState } from "../core/index.ts";
 import type { GitHub } from "./github.ts";
 import type { StoreError, StoreResult } from "./index.ts";
 
@@ -14,7 +14,7 @@ const fail = (kind: StoreError["kind"], detail: string): StoreResult<Executed> =
 const refKey = (r: IssueRef | PrRef): string => `${r.repo.owner}/${r.repo.name}#${r.number}`;
 const sameRef = (a: IssueRef, b: IssueRef): boolean => a.number === b.number && a.repo.owner === b.repo.owner && a.repo.name === b.repo.name;
 
-export async function execute(gh: GitHub, state: AgendaState, action: ProgramAction): Promise<StoreResult<Executed>> {
+export async function execute(gh: GitHub, state: AgendaState, action: StoreAction): Promise<StoreResult<Executed>> {
   try {
     switch (action.kind) {
       case "close":

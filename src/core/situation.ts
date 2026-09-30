@@ -15,8 +15,7 @@ export type GateState =
 /** Seat observation for one required request name (core.md §1 host.seats, §3 spawn/wake). */
 export type SeatState =
   | "live" // recorded holder is live
-  | "parked" // recorded holder is parked, this parked episode not yet answered by a `woken` receipt
-  | "parkedWoken" // recorded holder is parked, this episode already answered by a `woken` receipt
+  | "parked" // recorded holder is parked
   | "pendingAck" // a usable agent with this name exists and is not the recorded holder
   | "absent"; // no usable recorded holder and no pending agent
 

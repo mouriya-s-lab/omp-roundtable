@@ -16,6 +16,14 @@ export interface IssueRaw {
   readonly children: readonly IssueRef[];
 }
 
+/** What the createIssue source check compares: identity, title and body of an issue created since a proposal. */
+export interface CreatedIssue {
+  readonly ref: IssueRef;
+  readonly title: string;
+  readonly body: string;
+  readonly createdAt: Millis;
+}
+
 export type PrStateRaw =
   | { readonly kind: "open" }
   | { readonly kind: "merged"; readonly mergeSha: Sha; readonly mergedAt: Millis }
@@ -24,25 +32,29 @@ export type PrStateRaw =
 /** Checks for the PR head. `none`: the head has no status-check rollup; `requiresChecks` then decides pass or pending. */
 export type ChecksRaw = { readonly kind: "rollup"; readonly fact: ChecksFact } | { readonly kind: "none"; readonly requiresChecks: boolean };
 
-export interface PrRaw {
+/** A PR as an issue's closing reference: state, head, base and closing references, without body or checks. */
+export interface PrLinkRaw {
   readonly ref: PrRef;
-  readonly title: string;
-  readonly body: string;
   readonly state: PrStateRaw;
   readonly headRef: string;
   readonly head: Sha;
   readonly baseRepo: RepoRef;
   readonly base: string;
-  readonly mergeable: Mergeable;
-  readonly checks: ChecksRaw;
   /** GitHub `closingIssuesReferences` (empty when the base is not the default branch). */
   readonly closes: readonly IssueRef[];
 }
 
+export interface PrRaw extends PrLinkRaw {
+  readonly title: string;
+  readonly body: string;
+  readonly mergeable: Mergeable;
+  readonly checks: ChecksRaw;
+}
+
 export interface FactsRequest {
-  /** Issues to read, each with the PRs whose closing references include it. */
+  /** Issues to read, each with the links of the PRs whose closing references include it. */
   readonly issues: readonly IssueRef[];
-  /** Read with its sub-issues (each also with its closing PRs). */
+  /** Read with its sub-issues (each also with its closing-PR links). */
   readonly parent: IssueRef | null;
   /** PRs to read regardless of closing references (registered and adopted PRs). */
   readonly prs: readonly PrRef[];
@@ -54,8 +66,10 @@ export interface FactsRequest {
 
 export interface FactsResponse {
   readonly issues: readonly IssueRaw[];
-  /** Every PR read: requested ones and the closing PRs of every issue read. */
+  /** The requested PRs. */
   readonly prs: readonly PrRaw[];
+  /** The closing-PR links of every issue read. */
+  readonly links: readonly PrLinkRaw[];
   readonly branches: readonly { readonly repo: RepoRef; readonly branch: string; readonly head: Sha | null }[];
   readonly defaultHeads: readonly { readonly repo: RepoRef; readonly head: Sha }[];
 }
@@ -84,7 +98,7 @@ export interface GitHub {
   /** Open PRs whose head is branch `head` of `repo` itself. */
   openPrsByHead(repo: RepoRef, head: string): Promise<readonly PrRaw[]>;
   /** Issues (never PRs) of `repo` created at or after `since`, read-after-write consistent. */
-  issuesCreatedSince(repo: RepoRef, since: Millis): Promise<readonly IssueRaw[]>;
+  issuesCreatedSince(repo: RepoRef, since: Millis): Promise<readonly CreatedIssue[]>;
 
   // ------------------------------------------------------------ deliverable writes
   createIssue(repo: RepoRef, title: string, body: string): Promise<IssueRef>;

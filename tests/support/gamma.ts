@@ -28,6 +28,7 @@ import type {
   ObligationId,
   PendingClaim,
   PrFact,
+  PrLink,
   PrRef,
   ReplacementState,
   ReplyId,
@@ -181,14 +182,14 @@ class Assembly {
       replacements: this.replacements,
       subjects: this.subjects,
       effectDecisions: [],
-      seats: noise ? [{ requestName: "rt-elsewhere-owner", holder: "rt-elsewhere-owner" as AgentId, wokenFor: null }] : [],
+      seats: noise ? [{ requestName: "rt-elsewhere-owner", holder: "rt-elsewhere-owner" as AgentId }] : [],
       lastDecision: noise ? ("noise-decision" as ReplyId) : null,
       reported: this.reported,
     };
   }
 
   facts(): Facts {
-    const noisePrs: PrFact[] = this.v.noise
+    const noiseLinks: PrLink[] = this.v.noise
       ? [
           {
             ref: { repo: this.v.repo, number: this.v.pr + 77 },
@@ -196,16 +197,14 @@ class Assembly {
             headBranch: "elsewhere",
             head: "noise-head" as Sha,
             target: { repo: this.v.repo, base: "main" },
-            bodyHash: "noise-pr" as Hash,
-            mergeable: "yes",
-            checks: { state: "pass", failedRunId: null },
             closes: [{ repo: this.v.repo, number: this.v.member + 500 }],
           },
         ]
       : [];
     return {
       issues: this.issues,
-      prs: [...this.prs, ...noisePrs],
+      prs: this.prs,
+      links: noiseLinks,
       commits: { onDefault: this.onDefault.map((sha) => ({ repo: this.v.repo, sha })), contains: [], baseHead: [] },
     };
   }

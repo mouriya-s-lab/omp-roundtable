@@ -305,14 +305,14 @@ function questionVerdict(value: unknown, path: string): Extract<Decision, { subj
 
 const DECISION_KEYS = [
   "subject", "claim", "verdict", "affected", "member", "bodyHash", "verdictId", "event", "pr", "runId", "key",
-  "effect", "failedAt", "commit", "summary", "reason", "requestName", "previous", "agentId", "parkedSince",
+  "effect", "failedAt", "commit", "summary", "reason", "requestName", "previous", "agentId",
 ];
 
 function decision(value: unknown, path: string): Decision {
   const o = record(value, path, DECISION_KEYS);
   const subject = choice(o.subject, `${path}.subject`, [
     "question", "noCodeClaim", "splitClaim", "blockedClaim", "findings", "closed", "reopened", "checks", "postMergeFail", "closureFail",
-    "orphanDesign", "migration", "agendaGap", "stall", "effectFailed", "designFix", "report", "noCode", "seated", "woken",
+    "orphanDesign", "migration", "agendaGap", "stall", "effectFailed", "designFix", "report", "noCode", "seated",
   ]);
   switch (subject) {
     case "question":
@@ -374,9 +374,6 @@ function decision(value: unknown, path: string): Decision {
     case "seated":
       record(value, path, ["subject", "requestName", "previous", "agentId"]);
       return { subject, requestName: string(o.requestName, `${path}.requestName`), previous: nullable(o.previous, `${path}.previous`, agentId), agentId: agentId(o.agentId, `${path}.agentId`) };
-    case "woken":
-      record(value, path, ["subject", "agentId", "parkedSince"]);
-      return { subject, agentId: agentId(o.agentId, `${path}.agentId`), parkedSince: millis(o.parkedSince, `${path}.parkedSince`) };
     default:
       return assertNever(subject);
   }

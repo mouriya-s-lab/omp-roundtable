@@ -1,8 +1,8 @@
 // readFacts: the GitHub facts one derivation round needs (core.md §1 Facts), from one `facts` request plus commit
 // containment answered from an immutable cache (omp-roundtable.md Q7). Nothing here is stored beyond the round.
 
-import { bodyHash, computeUnits, type AgendaState, type Facts, type IssueFact, type IssueRef, type PrFact, type PrRef, type RepoRef, type Sha } from "../core/index.ts";
-import type { FactsRequest, GitHub, IssueRaw, PrRaw } from "./github.ts";
+import { bodyHash, computeUnits, type AgendaState, type Facts, type IssueFact, type IssueRef, type PrFact, type PrLink, type PrRef, type RepoRef, type Sha } from "../core/index.ts";
+import type { FactsRequest, GitHub, IssueRaw, PrLinkRaw, PrRaw } from "./github.ts";
 import type { StoreResult } from "./index.ts";
 
 /** A commit pair the core reads: does `descendant` contain `ancestor` in `repo`. */
@@ -65,16 +65,20 @@ const issueFact = (raw: IssueRaw): IssueFact => ({
   children: raw.children,
 });
 
-export const prFact = (raw: PrRaw): PrFact => ({
+const linkFact = (raw: PrLinkRaw): PrLink => ({
   ref: raw.ref,
   state: raw.state,
   headBranch: raw.headRef,
   head: raw.head,
   target: { repo: raw.baseRepo, base: raw.base },
+  closes: raw.closes,
+});
+
+export const prFact = (raw: PrRaw): PrFact => ({
+  ...linkFact(raw),
   bodyHash: bodyHash(raw.body),
   mergeable: raw.mergeable,
   checks: raw.checks.kind === "rollup" ? raw.checks.fact : { state: raw.checks.requiresChecks ? "pending" : "pass", failedRunId: null },
-  closes: raw.closes,
 });
 
 /** Design commits the state refers to: route commits and designFix commits. */
@@ -88,11 +92,13 @@ export async function readFacts(gh: GitHub, cache: ContainsCache, state: AgendaS
     const request = factsRequest(state);
     const raw = await gh.facts(request);
     const prs = uniqueBy(raw.prs, (p) => refKey(p.ref)).map(prFact);
+    const links = uniqueBy(raw.links, (p) => refKey(p.ref)).map(linkFact);
     const design = designCommits(state);
     const onDefault: { repo: RepoRef; sha: Sha }[] = [];
     for (const d of raw.defaultHeads)
       for (const sha of design) if (await cache.get(gh, { repo: d.repo, ancestor: sha, descendant: d.head })) onDefault.push({ repo: d.repo, sha });
-    const pairs: CommitPair[] = prs.filter((p) => p.state.kind === "open").flatMap((p) => design.map((sha) => ({ repo: p.target.repo, ancestor: sha, descendant: p.head })));
+    const open = uniqueBy([...prs, ...links], (p) => refKey(p.ref)).filter((p) => p.state.kind === "open");
+    const pairs: CommitPair[] = open.flatMap((p) => design.map((sha) => ({ repo: p.target.repo, ancestor: sha, descendant: p.head })));
     const contains: CommitPair[] = [];
     for (const p of uniqueBy(pairs, (x) => `${repoKey(x.repo)}|${x.ancestor}|${x.descendant}`)) if (await cache.get(gh, p)) contains.push(p);
     return {
@@ -100,6 +106,7 @@ export async function readFacts(gh: GitHub, cache: ContainsCache, state: AgendaS
       value: {
         issues: raw.issues.map(issueFact),
         prs,
+        links,
         commits: {
           onDefault,
           contains,

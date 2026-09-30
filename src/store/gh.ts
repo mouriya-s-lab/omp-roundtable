@@ -2,7 +2,7 @@
 // also go through GraphQL, which is read-after-write consistent where the REST lists lagged (evidence doc).
 
 import type { ChecksFact, EventId, IssueRef, LifecycleEvent, Mergeable, Millis, PrRef, RepoRef, Sha } from "../core/index.ts";
-import type { FactsRequest, FactsResponse, GitHub, IssueRaw, MergeOutcome, NewPr, PrRaw, PrStateRaw } from "./github.ts";
+import type { CreatedIssue, FactsRequest, FactsResponse, GitHub, IssueRaw, MergeOutcome, NewPr, PrLinkRaw, PrRaw, PrStateRaw } from "./github.ts";
 
 // ---------------------------------------------------------------- boundary parsing
 
@@ -54,10 +54,30 @@ const refOf = (value: unknown, where: string): { repo: RepoRef; number: number }
 
 const FAILED = ["FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED"];
 
-function prRaw(value: unknown): PrRaw {
+function linkRaw(value: unknown): PrLinkRaw {
   const node = object(value, "pullRequest");
-  const ref = refOf(node, "pullRequest");
-  const head = sha(node.headRefOid, "PR.headRefOid");
+  const stateName = text(node.state, "PR.state");
+  let state: PrStateRaw;
+  if (stateName === "OPEN") state = { kind: "open" };
+  else if (stateName === "MERGED") state = { kind: "merged", mergeSha: sha(object(node.mergeCommit, "PR.mergeCommit").oid, "PR.mergeCommit.oid"), mergedAt: timestamp(node.mergedAt, "PR.mergedAt") };
+  else if (stateName === "CLOSED") state = { kind: "closedUnmerged", closedAt: timestamp(node.closedAt, "PR.closedAt") };
+  else throw new Error(`Invalid PR.state: ${stateName}`);
+  return {
+    ref: refOf(node, "pullRequest"),
+    state,
+    headRef: text(node.headRefName, "PR.headRefName"),
+    head: sha(node.headRefOid, "PR.headRefOid"),
+    baseRepo: repoName(object(node.baseRepository, "PR.baseRepository").nameWithOwner, "PR.baseRepository.nameWithOwner"),
+    base: text(node.baseRefName, "PR.baseRefName"),
+    closes: nodes(node.closingIssuesReferences, "PR.closingIssuesReferences", "next").map((n) => refOf(n, "closing issue")),
+  };
+}
+
+function prRaw(value: unknown): PrRaw {
+  const link = linkRaw(value);
+  const node = object(value, "pullRequest");
+  const ref = link.ref;
+  const head = link.head;
   const commits = nodes(node.commits, "PR.commits", "none");
   const commit = commits.length === 0 ? null : object(object(commits[0], "PR commit node").commit, "PR commit");
   if (commit !== null && sha(commit.oid, "PR commit oid") !== head) throw new Error(`PR ${ref.number}: head changed during read`);
@@ -80,30 +100,12 @@ function prRaw(value: unknown): PrRaw {
     };
     checks = { kind: "rollup", fact };
   }
-  const stateName = text(node.state, "PR.state");
-  let state: PrStateRaw;
-  if (stateName === "OPEN") state = { kind: "open" };
-  else if (stateName === "MERGED") state = { kind: "merged", mergeSha: sha(object(node.mergeCommit, "PR.mergeCommit").oid, "PR.mergeCommit.oid"), mergedAt: timestamp(node.mergedAt, "PR.mergedAt") };
-  else if (stateName === "CLOSED") state = { kind: "closedUnmerged", closedAt: timestamp(node.closedAt, "PR.closedAt") };
-  else throw new Error(`Invalid PR.state: ${stateName}`);
   const mergeableName = text(node.mergeable, "PR.mergeable");
   const mergeable: Mergeable = mergeableName === "MERGEABLE" ? "yes" : mergeableName === "CONFLICTING" ? "no" : "unknown";
-  return {
-    ref,
-    title: text(node.title, "PR.title"),
-    body: text(node.body, "PR.body"),
-    state,
-    headRef: text(node.headRefName, "PR.headRefName"),
-    head,
-    baseRepo: repoName(object(node.baseRepository, "PR.baseRepository").nameWithOwner, "PR.baseRepository.nameWithOwner"),
-    base: text(node.baseRefName, "PR.baseRefName"),
-    mergeable,
-    checks,
-    closes: nodes(node.closingIssuesReferences, "PR.closingIssuesReferences", "next").map((n) => refOf(n, "closing issue")),
-  };
+  return { ...link, title: text(node.title, "PR.title"), body: text(node.body, "PR.body"), mergeable, checks };
 }
 
-function issueRaw(value: unknown, withChildren: boolean): { issue: IssueRaw; closingPrs: PrRaw[] } {
+function issueRaw(value: unknown, withChildren: boolean): { issue: IssueRaw; links: PrLinkRaw[] } {
   const node = object(value, "issue");
   const ref = refOf(node, "issue");
   const events: LifecycleEvent[] = nodes(node.timelineItems, "issue.timelineItems", "previous").flatMap((e) => {
@@ -122,28 +124,44 @@ function issueRaw(value: unknown, withChildren: boolean): { issue: IssueRaw; clo
       events: events.sort((a, b) => a.at - b.at),
       children: withChildren ? nodes(node.subIssues, "issue.subIssues", "next").map((c) => refOf(c, "sub-issue")) : [],
     },
-    closingPrs: nodes(node.closedByPullRequestsReferences, "issue.closedByPullRequestsReferences", "next").map(prRaw),
+    links: nodes(node.closedByPullRequestsReferences, "issue.closedByPullRequestsReferences", "next").map(linkRaw),
   };
 }
 
 // ---------------------------------------------------------------- GraphQL documents
 
-const PR_FIELDS = `number repository { nameWithOwner } title body state mergedAt closedAt mergeCommit { oid }
-  headRefName headRefOid baseRepository { nameWithOwner } baseRefName mergeable
+// GitHub caps a query at 500,000 possible nodes. An issue's closing PRs are read as links (no checks, rules or body),
+// so a parent with 100 sub-issues plus 50 member issues stays near 400,000; full PR fields are read only for the
+// registered and adopted PRs requested by number.
+const LINK_FIELDS = `number repository { nameWithOwner } state mergedAt closedAt mergeCommit { oid }
+  headRefName headRefOid baseRepository { nameWithOwner } baseRefName
+  closingIssuesReferences(first: 50) { nodes { number repository { nameWithOwner } } pageInfo { hasNextPage } }`;
+
+const PR_FIELDS = `...LINK title body mergeable
   baseRef { refUpdateRule { requiredStatusCheckContexts } rules(first: 50) { nodes { type } } }
-  closingIssuesReferences(first: 50) { nodes { number repository { nameWithOwner } } pageInfo { hasNextPage } }
   commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { databaseId conclusion } } } } } } }`;
 
 const ISSUE_FIELDS = `number repository { nameWithOwner } title state body createdAt
   timelineItems(itemTypes: [CLOSED_EVENT, REOPENED_EVENT], last: 100) {
     nodes { __typename ... on ClosedEvent { id createdAt } ... on ReopenedEvent { id createdAt } } pageInfo { hasPreviousPage } }
-  closedByPullRequestsReferences(includeClosedPrs: true, first: 50) { nodes { ...PR } pageInfo { hasNextPage } }`;
+  closedByPullRequestsReferences(includeClosedPrs: true, first: 50) { nodes { ...LINK } pageInfo { hasNextPage } }`;
 
-const FRAGMENTS = `fragment PR on PullRequest { ${PR_FIELDS} }\nfragment ISSUE on Issue { ${ISSUE_FIELDS} }`;
+// GitHub rejects a document that defines a fragment it does not use, so each query carries exactly the fragments it
+// spreads; PR and ISSUE both spread LINK.
+function document(query: string): string {
+  const issue = query.includes("...ISSUE");
+  const pr = query.includes("...PR");
+  const fragments = [
+    `fragment LINK on PullRequest { ${LINK_FIELDS} }`,
+    ...(pr ? [`fragment PR on PullRequest { ${PR_FIELDS} }`] : []),
+    ...(issue ? [`fragment ISSUE on Issue { ${ISSUE_FIELDS} }`] : []),
+  ];
+  return [query, ...(issue || pr ? fragments : [])].join("\n");
+}
 
 const repoArgs = (r: RepoRef): string => `owner: ${JSON.stringify(r.owner)}, name: ${JSON.stringify(r.name)}`;
 
-/** The one query of a facts round: every issue (with closing PRs), the parent with its sub-issues, PRs and branch heads. */
+/** The one query of a facts round: every issue (with closing-PR links), the parent with its sub-issues, PRs and branch heads. */
 export function factsQuery(req: FactsRequest): string {
   const parts: string[] = [];
   req.issues.forEach((i, n) => parts.push(`i${n}: repository(${repoArgs(i.repo)}) { issue(number: ${i.number}) { ...ISSUE } }`));
@@ -152,7 +170,7 @@ export function factsQuery(req: FactsRequest): string {
   req.prs.forEach((p, n) => parts.push(`p${n}: repository(${repoArgs(p.repo)}) { pullRequest(number: ${p.number}) { ...PR } }`));
   req.branches.forEach((b, n) => parts.push(`b${n}: repository(${repoArgs(b.repo)}) { ref(qualifiedName: ${JSON.stringify(`refs/heads/${b.branch}`)}) { target { oid } } }`));
   req.repos.forEach((r, n) => parts.push(`d${n}: repository(${repoArgs(r)}) { defaultBranchRef { target { oid } } }`));
-  return `query {\n${parts.join("\n")}\n}\n${FRAGMENTS}`;
+  return document(`query {\n${parts.join("\n")}\n}`);
 }
 
 // ---------------------------------------------------------------- the backend
@@ -199,11 +217,12 @@ export class GhGitHub implements GitHub {
     const data = await this.graphql(factsQuery(req));
     const issues: IssueRaw[] = [];
     const prs: PrRaw[] = [];
+    const links: PrLinkRaw[] = [];
     const take = (value: unknown, withChildren: boolean, where: string): void => {
       if (value === null) throw new Error(`${where} not found`);
       const read = issueRaw(value, withChildren);
       issues.push(read.issue);
-      prs.push(...read.closingPrs);
+      links.push(...read.links);
     };
     req.issues.forEach((i, n) => take(object(data[`i${n}`], `i${n}`).issue, false, `issue ${i.repo.owner}/${i.repo.name}#${i.number}`));
     if (req.parent !== null) {
@@ -224,7 +243,7 @@ export class GhGitHub implements GitHub {
       repo: r,
       head: sha(object(object(object(data[`d${n}`], `d${n}`).defaultBranchRef, "defaultBranchRef").target, "defaultBranchRef.target").oid, "defaultBranchRef.target.oid"),
     }));
-    return { issues, prs, branches, defaultHeads };
+    return { issues, prs, links, branches, defaultHeads };
   }
 
   async contains(repo: RepoRef, ancestor: Sha, descendant: Sha): Promise<boolean> {
@@ -251,14 +270,14 @@ export class GhGitHub implements GitHub {
   }
 
   async issue(ref: IssueRef): Promise<IssueRaw> {
-    const data = await this.graphql(`query { r: repository(${repoArgs(ref.repo)}) { issue(number: ${ref.number}) { ...ISSUE subIssues(first: 100) { nodes { number repository { nameWithOwner } } pageInfo { hasNextPage } } } } }\n${FRAGMENTS}`);
+    const data = await this.graphql(document(`query { r: repository(${repoArgs(ref.repo)}) { issue(number: ${ref.number}) { ...ISSUE subIssues(first: 100) { nodes { number repository { nameWithOwner } } pageInfo { hasNextPage } } } } }`));
     const node = object(data.r, "repository").issue;
     if (node === null) throw new Error(`issue ${ref.repo.owner}/${ref.repo.name}#${ref.number} not found`);
     return issueRaw(node, true).issue;
   }
 
   async pr(ref: PrRef): Promise<PrRaw> {
-    const data = await this.graphql(`query { r: repository(${repoArgs(ref.repo)}) { pullRequest(number: ${ref.number}) { ...PR } } }\n${FRAGMENTS}`);
+    const data = await this.graphql(document(`query { r: repository(${repoArgs(ref.repo)}) { pullRequest(number: ${ref.number}) { ...PR } } }`));
     const node = object(data.r, "repository").pullRequest;
     if (node === null) throw new Error(`PR ${ref.repo.owner}/${ref.repo.name}#${ref.number} not found`);
     return prRaw(node);
@@ -266,7 +285,7 @@ export class GhGitHub implements GitHub {
 
   async openPrsByHead(repo: RepoRef, head: string): Promise<readonly PrRaw[]> {
     const data = await this.graphql(
-      `query { r: repository(${repoArgs(repo)}) { pullRequests(headRefName: ${JSON.stringify(head)}, states: [OPEN], first: 20) { nodes { ...PR headRepositoryOwner { login } } pageInfo { hasNextPage } } } }\n${FRAGMENTS}`,
+      document(`query { r: repository(${repoArgs(repo)}) { pullRequests(headRefName: ${JSON.stringify(head)}, states: [OPEN], first: 20) { nodes { ...PR headRepositoryOwner { login } } pageInfo { hasNextPage } } } }`),
     );
     // Only heads in `repo` itself (a fork may use the same branch name).
     return nodes(object(data.r, "repository").pullRequests, "pullRequests", "next")
@@ -277,12 +296,15 @@ export class GhGitHub implements GitHub {
       .map(prRaw);
   }
 
-  async issuesCreatedSince(repo: RepoRef, since: Millis): Promise<readonly IssueRaw[]> {
+  async issuesCreatedSince(repo: RepoRef, since: Millis): Promise<readonly CreatedIssue[]> {
     const data = await this.graphql(
-      `query { r: repository(${repoArgs(repo)}) { issues(filterBy: { since: ${JSON.stringify(new Date(since).toISOString())} }, first: 100, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...ISSUE } } } }\n${FRAGMENTS}`,
+      `query { r: repository(${repoArgs(repo)}) { issues(filterBy: { since: ${JSON.stringify(new Date(since).toISOString())} }, first: 100, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { number repository { nameWithOwner } title body createdAt } } } }`,
     );
     return nodes(object(data.r, "repository").issues, "issues", "none")
-      .map((n) => issueRaw(n, false).issue)
+      .map((value) => {
+        const n = object(value, "issue");
+        return { ref: refOf(n, "issue"), title: text(n.title, "issue.title"), body: text(n.body, "issue.body"), createdAt: timestamp(n.createdAt, "issue.createdAt") };
+      })
       .filter((i) => i.createdAt >= since);
   }
 

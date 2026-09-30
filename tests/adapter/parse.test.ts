@@ -13,11 +13,6 @@ describe("reply parsing", () => {
     expect(parseReply(ticket, { kind: "verdict", ok: true, note: "", observedHead: "a".repeat(40) }).ok).toBe(false);
   });
 
-  test("woken names the parked episode; the old count or since field is an unknown key", () => {
-    expect(parseReply(ticket, decision({ subject: "woken", agentId: "rt-x-owner", parkedSince: 1700 }))).toMatchObject({ ok: true, value: { decision: { parkedSince: 1700 } } });
-    expect(parseReply(ticket, decision({ subject: "woken", agentId: "rt-x-owner", since: 1700 })).ok).toBe(false);
-  });
-
   test("a not-ok verdict gets one ruling, naming the verdict by reply id; a comment-era record id is refused", () => {
     expect(parseReply(ticket, decision({ subject: "findings", verdictId: "re-00000000000000aa", verdict: { kind: "rejected", basis: "b" } })).ok).toBe(true);
     const old = parseReply(ticket, decision({ subject: "findings", verdictRecord: "123456", verdict: { kind: "rejected", basis: "b" } }));

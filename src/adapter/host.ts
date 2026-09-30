@@ -1,7 +1,9 @@
-// Host reads (C5): registry agents, caller identity, and the spawn premise. Queried on demand, never stored.
+// Host reads (C5): registry agents, caller identity, and the spawn premise, queried on demand and never stored; and the
+// one host write, waking a parked seat (the program `wake` action).
 // Host modules are imported through package paths only, so they resolve to the CLI runtime singletons.
 
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentRegistry, MAIN_AGENT_ID, type AgentStatus } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
@@ -54,6 +56,19 @@ export function callerOf(ctx: ExtensionContext): Caller {
   if (ctx.agent.kind === "main") return { kind: "main" };
   const ref = AgentRegistry.global().get(ctx.agent.id);
   return { kind: "sub", agentId: ctx.agent.id as AgentId, sessionMatches: ref?.session?.sessionManager === ctx.sessionManager };
+}
+
+/** What the woken seat reads first; its tickets arrive through the `context` injection of the revived turn. */
+const WAKE_BODY = "圆桌：你持有的票据还没有完成。按本轮注入的票据继续，完成后用 roundtable 端口回复。";
+
+/**
+ * Program `wake`: send the seat a message from main through the host's IRC bus, which revives a parked session
+ * (`AgentLifecycleManager.ensureLive`) and starts its turn. Completion is the registry fact (the seat is no longer
+ * parked in this episode); the receipt only reports whether delivery failed.
+ */
+export async function wakeSeat(agent: AgentId): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
+  const receipt = await IrcBus.global().send({ from: MAIN_AGENT_ID, to: agent, body: WAKE_BODY });
+  return receipt.outcome === "failed" ? { ok: false, error: `wake ${agent}: ${receipt.error ?? "delivery failed"}` } : { ok: true };
 }
 
 /**

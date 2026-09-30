@@ -98,17 +98,17 @@ describe("model checking (core.md §6.4)", () => {
       "decidePostMergeFail: reverify", "decidePostMergeFail: correction", "decideClosureFail: reverify", "decideClosureFail: correction",
       "decide:agendaGap: resolved", "decide:agendaGap: external",
       "decideEffectFailed: retry", "decideEffectFailed: external", "decideStall: external", "report: summary",
-      "spawn: seated", "wake: woken (receipt, then write agent://)", "wake: woken (receipt only)",
+      "spawn: seated",
       // program effects, including failures and a result lost after the GitHub write
       "effect openPr", "effect updatePr", "effect applyBody", "effect createIssue", "effect rerunChecks",
       "effect openPr (result lost)", "effect applyBody (result lost)", "effect createIssue (result lost)",
       "effect openPr fails", "effect openPr fails again after retry",
-      "merge (issue auto-closed)", "merge (no auto-close)", "program close", "program reopen", "program closeParent",
+      "merge (issue auto-closed)", "merge (no auto-close)", "program close", "program reopen", "program closeParent", "program wake", "program wake fails",
       // perturbations and fairness
       "perturb: push new head", "perturb: member body edited", "perturb: human close member", "perturb: human reopen member",
       "perturb: checks -> fail", "perturb: mergeable -> no", "perturb: seat parked", "perturb: seat aborted", "perturb: PR closed unmerged",
       "settle: checks -> pass", "settle: checks -> fail", "settle: mergeable -> yes", "settle: mergeable -> no",
-      "restart (execution failures forgotten)", "native wake after receipt",
+      "restart (execution failures forgotten)",
     ];
     expect(required.filter((r) => ![...labelsSeen].some((l) => l === r || l.startsWith(`${r} `) || l.startsWith(`${r}(`)))).toEqual([]);
   });

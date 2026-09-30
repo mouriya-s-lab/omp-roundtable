@@ -176,9 +176,8 @@ export function seatRules(s: SeatSlotSituation): readonly Spec<SeatKind>[] {
     case "absent":
       return s.needed ? [spec("spawn", "main")] : [];
     case "parked":
-      return s.needed ? [spec("wake", "main")] : [];
+      return s.needed ? [spec("wake", "program")] : [];
     case "live":
-    case "parkedWoken":
       return [];
     default:
       return assertNever(s.seat);

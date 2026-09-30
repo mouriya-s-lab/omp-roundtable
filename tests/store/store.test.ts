@@ -124,7 +124,7 @@ describe("one delivery round trip on the in-memory GitHub", () => {
     // openPr: the result is lost after the GitHub write; the next execution finds the PR by its head branch
     obs = await derived(state, host);
     const openPr = obs.find((o) => o.kind === "effect:openPr");
-    if (openPr === undefined || openPr.action === null) throw new Error("no openPr effect");
+    if (openPr === undefined || openPr.action === null || openPr.action.kind === "wake") throw new Error("no openPr effect");
     const first = unwrap(await store.execute(state, openPr.action));
     expect(first.kind).toBe("result");
     expect(gh.count("createPr")).toBe(1);
