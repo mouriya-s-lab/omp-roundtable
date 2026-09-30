@@ -407,14 +407,25 @@ const upheld = (v: StoredVerdict | null, who: "owner" | "main"): boolean => v !=
 
 // ---------------------------------------------------------------- seats
 
-function seatState(host: Host, state: AgendaState, name: string): { state: SeatState; holder: AgentId | null; pending: AgentId | null; parkedSince: Millis | null } {
-  const rec = state.seats.find((s) => s.requestName === name);
-  const holderId = rec?.holder ?? null;
+/**
+ * The agent awaiting a `seated` receipt for request name `name`: only when the recorded holder is no longer usable
+ * (none, gone from the registry, or aborted), the first usable agent of that name in registry order. While the holder
+ * is usable, another agent of the same name is a stray duplicate: it holds nothing and is never asked to be
+ * acknowledged, so two agents can never take turns as holder.
+ */
+function pendingAgent(host: Host, holderId: AgentId | null, name: string): AgentId | null {
   const holder = holderId === null ? undefined : host.agents.find((a) => a.id === holderId);
-  const pending = host.agents.find((a) => stripSuffix(a.id) === name && a.status !== "aborted" && a.id !== holderId);
-  if (pending !== undefined) return { state: "pendingAck", holder: holderId, pending: pending.id, parkedSince: null };
+  if (holder !== undefined && holder.status !== "aborted") return null;
+  return host.agents.find((a) => stripSuffix(a.id) === name && a.status !== "aborted" && a.id !== holderId)?.id ?? null;
+}
+
+function seatState(host: Host, state: AgendaState, name: string): { state: SeatState; holder: AgentId | null; pending: AgentId | null; parkedSince: Millis | null } {
+  const holderId = state.seats.find((s) => s.requestName === name)?.holder ?? null;
+  const holder = holderId === null ? undefined : host.agents.find((a) => a.id === holderId);
   if (holder !== undefined && holder.status === "live") return { state: "live", holder: holderId, pending: null, parkedSince: null };
   if (holder !== undefined && holder.status === "parked") return { state: "parked", holder: holderId, pending: null, parkedSince: holder.parkedSince };
+  const pending = pendingAgent(host, holderId, name);
+  if (pending !== null) return { state: "pendingAck", holder: holderId, pending, parkedSince: null };
   return { state: "absent", holder: holderId, pending: null, parkedSince: null };
 }
 
@@ -470,14 +481,15 @@ export function classify(state: AgendaState, facts: Facts, host: Host): Classifi
 
   const subjects = classifySubjects(mint, state, facts, units);
 
+  // agents of request names no current obligation needs (a seat that finished before its receipt): one receipt per name
   const pendingAcks: PendingAck[] = [];
   const current = new Set(seats.map((s) => s.w.requestName));
-  for (const a of host.agents) {
-    if (a.status === "aborted" || !a.requestName.startsWith("rt-")) continue;
-    const name = stripSuffix(a.id);
+  const names = new Set(host.agents.filter((a) => a.status !== "aborted" && a.requestName.startsWith("rt-")).map((a) => stripSuffix(a.id)));
+  for (const name of names) {
+    if (current.has(name)) continue;
     const previous = state.seats.find((s) => s.requestName === name)?.holder ?? null;
-    if (current.has(name) || previous === a.id) continue;
-    pendingAcks.push({ requestName: name, agentId: a.id, previous, id: mint("spawn", "seat", { requestName: name, previous }, 1) });
+    const agentId = pendingAgent(host, previous, name);
+    if (agentId !== null) pendingAcks.push({ requestName: name, agentId, previous, id: mint("spawn", "seat", { requestName: name, previous }, 1) });
   }
 
   const stallKey = fnv64(

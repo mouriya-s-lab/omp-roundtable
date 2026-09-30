@@ -47,7 +47,7 @@
 **宿主观察 `host`**：adapter 每轮向宿主查询，不作保存。
 
 - `seats`：registry 里的每个 agent，含实际 id、请求名（去掉末尾 `-\d+` 后缀）、状态 `live | parked | aborted`，parked 时带本次 parked 期的起点。
-  - 席位状态：存在不是持有者的可用 agent 时为 `pendingAck`；否则持有者 live 时为 `live`，parked 时为 `parked`；其余为 `absent`。
+  - 席位状态：持有者 live 时为 `live`，parked 时为 `parked`；持有者不可用（没有持有者、不在 registry 中或已 aborted）而存在待回执的 agent 时为 `pendingAck`；其余为 `absent`。
 - `execution`：本进程内每个效应每次执行失败的时间与错误原文，错误原文写进 `decide(effectFailed)` 的简报。重启后为空，等于重新尝试。
 - `policy`：简报要附带的策略原文，以及派出 owner 席位与 gate 席位用的 agent 类型（由设置给出，默认 `task:high` 与 `task:mid`）。它只进入 `realize`，只影响简报与席位请求，不影响 id 或 pin。
 
@@ -209,7 +209,7 @@ gate 槽位的取代（`step` 执行）：
   - 有结果写回的效应：最近一次失败还没有钉住它的 `effectFailed` 裁定时，这个效应暂停执行，并给出 Main `decide(effectFailed)`，pin 为（效应 id，失败时间）。`retry` 只放行这一次失败；再失败会得到新的 pin 和新的裁定。`external` 让这个效应在该裁定有效期间不再执行，并进入等待集合。
   - 没有结果写回的效应（`close`、`reopen`、`merge`、`closeParent`、`reopen(parent)`、`wake`）：下一轮按事实重新推导，条件仍成立就再执行一次。`wake` 投递失败时持有者仍是 parked；持有者已 aborted 时席位变为 `absent`，改由 `spawn` 续作。
 - **Main `spawn(请求名)`：先执行，再回执**。插件不能派出原生子 agent，所以由主会话执行；重复派出会多出一个 agent，所以回执必须证明动作已经生效。
-  - 「可用的 agent」：在 registry 中，状态不是 aborted，去掉后缀后等于请求名。「待回执的 agent」：可用、但不是状态里记录的持有者。
+  - 「可用的 agent」：在 registry 中，状态不是 aborted，去掉后缀后等于请求名。「待回执的 agent」：只在持有者不可用时存在，是 registry 顺序里第一个不是持有者的可用 agent。持有者可用时，同名的其他 agent 是多派出的重复：不持有票据，也不要求回执，所以两个 agent 不会轮流被回执成持有者。
   - pin 为（请求名，状态里的持有者或「无」）。以下任一成立时推导出来：
     - 存在待回执的 agent。此时不论席位是否仍然需要都要回执，即使子席位已经先完成了工作；简报写明「只需回执」。
     - 席位仍然需要，持有者已不可用（或还没有持有者），并且没有待回执的 agent。简报写明「用原生 `task` 派出」。

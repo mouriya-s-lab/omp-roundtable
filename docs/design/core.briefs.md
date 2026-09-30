@@ -69,5 +69,5 @@
 | `stall` | `external(detail)`，或补充事实的草稿与插入 |
 | `designFix` | 设计 commit |
 | `report` | 汇总 |
-| `seated` | 实际 agentId：该 agent 是待回执的 agent（在 registry 中且不是 aborted，去掉后缀后等于请求名，不是状态里记录的持有者） |
+| `seated` | 实际 agentId：该 agent 是待回执的 agent（持有者不可用时，registry 顺序里第一个在 registry 中、不是 aborted、去掉后缀后等于请求名、不是持有者的 agent） |
 | `noCode`（主会话不持票据，主动提出） | `confirmed`（附理由） |

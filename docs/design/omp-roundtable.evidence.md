@@ -27,6 +27,7 @@
 | `task` 条目的 `name` 是请求名：同步派出时只保留 `[A-Za-z0-9_-]` 并截断到 48 个字符；同一个分配器里重复的名字会被加上 `-2`、`-3` 后缀，旧条目不会被替换；实际 id 就是 `AgentRef.id`，也就是 `ctx.agent.id` | `CA/task/index.ts:850-870`；`CA/task/structured-subagent.ts:215-218,433-441` |
 | `ctx.agent.name` 是 agent 定义名（例如 `task:mid`），不是请求名。核验调用者的方法是：用 `ctx.agent.id` 查 registry，并确认该条目的 `session.sessionManager` 就是调用者的 `ctx.sessionManager` | 同上；`CA/registry/agent-registry.ts` |
 | `task` 条目的 agent 类型声明了 `blocking: true`，或者宿主设置 `async.enabled` 为假时，子 agent 在父会话这一轮内同步运行，父会话要等它结束才能继续。`async.enabled` 默认为真 | `CA/task/index.ts:749-767,895-896,1302-1306`；`CA/tools/settings.ts:846-850` |
+| 隔离派出（`isolated: true`）要求主会话的工作目录在仓库里：宿主用 `getRepoRoot(cwd)` 找仓库根，找不到就报 `Git repository not found for isolated task execution.`，这次派出失败 | `CA/task/worktree.ts:58-72`；`CA/task/isolation-runner.ts:145-149`。探针（真机 E2E，2026-09-30）：主会话在非仓库目录里按票据派出 owner，`task` 失败并报上述原文，主会话随后改用非隔离方式派出 |
 | 子 agent `yield` 时的文字会作为原生消息自动送达父会话 | `CA/task/executor.ts`（异步 job 结果投递） |
 
 ## GitHub
