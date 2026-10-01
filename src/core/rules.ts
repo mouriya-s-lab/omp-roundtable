@@ -58,14 +58,15 @@ export function memberRules(s: MemberSituation): readonly Spec<MemberKind>[] {
   if (s.claim !== "none") out.push(spec("decideClaim", "main"));
 
   if (s.ours === "none") {
-    if (!s.deliverDone) out.push(spec("deliver", ownerHolder));
+    if (s.repairMain) out.push(spec("designFix", "main"));
+    else if (!s.deliverDone) out.push(spec("deliver", ownerHolder));
     return out;
   }
 
   if (s.review === "validFailUnadjudicated" || s.accept === "validFailUnadjudicated") out.push(spec("decideFindings", "main"));
 
   const checksFixTrigger = s.checks === "fail" && !s.checksRunFixed;
-  if ((s.repairOwner || s.mergeable === "no" || checksFixTrigger) && !s.fixDone) out.push(spec("fix", ownerHolder));
+  if (!s.repairMain && (s.repairOwner || s.mergeable === "no" || checksFixTrigger) && !s.fixDone) out.push(spec("fix", ownerHolder));
   if (s.repairMain) out.push(spec("designFix", "main"));
   if (s.checks === "fail" && s.checksRunFixed && s.checksDecided === "none") out.push(spec("decideChecks", "main"));
 
