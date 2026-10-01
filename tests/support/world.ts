@@ -198,6 +198,42 @@ function ancestors(w: World, head: Sha): Sha[] {
   return [...out];
 }
 
+/** External landing used by fairness edges: a new merge commit carries the witnessed design commit onto the default head. */
+function landDefault(w: World, commit: Sha): World {
+  const t = tick(w);
+  const landing = sha(`external-design-${commit}`);
+  const next = addCommit(t, landing, [t.defaultHead, commit]);
+  const onDefault = ancestors(next, landing).map((sha) => ({ repo, sha }));
+  return {
+    ...withFacts(next, { commits: { ...next.facts.commits, onDefault: [...next.facts.commits.onDefault, ...onDefault] } }),
+    defaultHead: landing,
+  };
+}
+
+/** External merged child used by the agenda-gap fairness edge; it is a normal fact with ordinary commit ancestry. */
+function mergeExternal(w: World, member: IssueRef): World {
+  const t = tick(w);
+  const mergeSha = sha(`external-merge-${member.number}`);
+  let next = addCommit(t, mergeSha, [t.defaultHead]);
+  const pr: PrFact = {
+    ref: { repo, number: 10_000 + member.number },
+    state: { kind: "merged", mergeSha, mergedAt: ms(t.clock) },
+    headBranch: `external-${member.number}`,
+    head: mergeSha,
+    target: { repo, base: "main" },
+    bodyHash: hash(`external-merge-${member.number}`),
+    mergeable: "yes",
+    checks: { state: "pass", failedRunId: null },
+    closes: [member],
+  };
+  const onDefault = ancestors(next, mergeSha).map((s) => ({ repo, sha: s }));
+  next = withFacts(next, {
+    prs: [...next.facts.prs, pr],
+    commits: { ...next.facts.commits, onDefault: [...next.facts.commits.onDefault, ...onDefault] },
+  });
+  return { ...next, defaultHead: mergeSha };
+}
+
 // ------------------------------------------------------------------ replies and effect results through step
 
 export interface Rejection {
@@ -409,8 +445,8 @@ function decision(w: World, ob: Obligation, dec: Decision, drafts: readonly Draf
   return reply(w, MAIN, { kind: "decision", obligation: ob.id, decision: dec, rationale: "r", drafts, bodyReplacements });
 }
 
-function draft(anchor: Draft["anchor"]): Draft {
-  return { index: 0, repo, title: "t", body: "b", anchor, target: { repo, base: "main" }, designOnly: false };
+function draft(anchor: Draft["anchor"], designOnly = false): Draft {
+  return { index: 0, repo, title: "t", body: "b", anchor, target: { repo, base: "main" }, designOnly };
 }
 
 function replaceBody(w: World, ref: IssueRef): BodyReplacement {
@@ -531,7 +567,12 @@ function mainEdges(w: World, c: Classified, ob: Obligation): [string, Stepped | 
       const sub = c.subjects.find((s) => s.w.id === ob.id);
       if (sub === undefined) break;
       const sw = sub.w;
-      for (const verdict of ["resolved", "external"] as const) add(verdict, decision(w, ob, { subject: sw.subject, key: sw.key, verdict }));
+      const spent = spend(w, "draft");
+      if (spent !== null) {
+        const remediation = draft({ kind: "after", entry: c.units.at(-1)?.top.issue ?? issueRef(0) }, sw.subject === "orphanDesign");
+        add("resolved", decision(spent, ob, { subject: sw.subject, key: sw.key, verdict: "resolved" }, [remediation]));
+      }
+      add("external", decision(w, ob, { subject: sw.subject, key: sw.key, verdict: "external" }));
       break;
     }
     case "decideEffectFailed": {
@@ -735,6 +776,40 @@ function environmentEdges(w: World, c: Classified): [string, World | null, boole
       });
     }
   }
+  // Fairness: external subject decisions are lifted by the authoritative fact that resolves each subject.
+  for (const subject of c.subjects) {
+    if (subject.s.decided !== "external") continue;
+    switch (subject.w.subject) {
+      case "orphanDesign":
+        out.push(["lift external orphan design", landDefault(w, subject.w.commit), true]);
+        break;
+      case "migration":
+        out.push(["lift external migration", lifecycle(w, subject.w.migration, "reopened"), true]);
+        break;
+      case "agendaGap":
+        out.push(["lift external agenda gap", mergeExternal(w, subject.w.child), true]);
+        break;
+      default:
+        assertNever(subject.w);
+    }
+  }
+
+  // Fairness: an external applyBody conflict is lifted when the source body returns to either pinned hash.
+  for (const effect of c.effects) {
+    if (effect.s.conflict !== "external" || effect.w.target.kind !== "applyBody") continue;
+    const replacement = effect.w.target.replacement;
+    out.push([
+      "lift external body conflict: base",
+      updateIssue(tick(w), replacement.issue, (i) => ({ ...i, bodyHash: replacement.baseHash })),
+      true,
+    ]);
+    out.push([
+      "lift external body conflict: target",
+      updateIssue(tick(w), replacement.issue, (i) => ({ ...i, bodyHash: replacement.targetHash })),
+      true,
+    ]);
+  }
+
   // fairness: an `external` checks decision is eventually lifted by a new check run
   if (ours !== null && c.member?.s.checksDecided === "external") {
     out.push(["lift external checks: new run", updatePr(tick(w), ours.ref.number, (p) => ({ ...p, checks: { state: "pending", failedRunId: null } })), true]);

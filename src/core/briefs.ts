@@ -411,7 +411,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         ident,
         `裁定 ${input.subject.subject}`,
         `- ${canonical(input.subject)}`,
-        ["- resolved(附草稿或插入)：补上缺失的承载者、迁移或议程项。", "- external：进入等待集合，须立即报告操作员。"].join("\n"),
+        ["- resolved：必须附带补项草稿；草稿被接受不等于 GitHub 上的缺失事实已经满足。", "- external：进入等待集合，须立即报告操作员。外部解除条件：orphanDesign 的设计 commit 落入默认分支；migration 的原迁移 issue 重开，或作为议程成员交付；agendaGap 的原子 issue 得到已核实的终点。"].join("\n"),
         { subject: input.subject.subject, key: input.subject.key, verdict: "<resolved 或 external>" },
       );
     case "decideEffectFailed":
@@ -430,7 +430,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         ident,
         "正文替换的基准哈希已不符",
         `- 效应 ${input.effect.id}：${canonical(input.effect.target)}`,
-        `- 回复 Decision(stall{key: ${input.effect.conflictKey}})：resolved 时附上以当前正文哈希为基准的新替换，它取代这次冲突的替换；external 表示外部阻塞，须立即报告操作员。`,
+        `- 回复 Decision(stall{key: ${input.effect.conflictKey}})：resolved 时附上以当前正文哈希为基准的新替换，它取代这次冲突的替换；external 表示外部阻塞，须立即报告操作员。操作员可在 GitHub 把正文恢复为替换的基准，允许程序继续替换；或把正文设为目标，程序核对源头后只写回已应用结果。当前正文等于基准或目标后，这条冲突等待不再适用。`,
         { subject: "stall", key: input.effect.conflictKey, verdict: "<resolved 或 external>" },
       );
     case "report":

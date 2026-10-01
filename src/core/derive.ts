@@ -304,6 +304,7 @@ export function derive(state: AgendaState, facts: Facts, host: Host, policy: Pol
   const waiting =
     (c.member !== null && memberWaiting(c.member.s)) ||
     c.effects.some((e) => effectWaiting(e.s)) ||
+    c.subjects.some((s) => s.s.decided === "external") ||
     c.stall.decided === "external" ||
     obligations.some((o) => o.holder === "program");
   const done = c.currentUnit === null && closureDone(c.closure.s);

@@ -538,6 +538,8 @@ function preconditions(state: AgendaState, facts: Facts, c: Classified, reply: R
         if (issue === undefined || issue.bodyHash !== b.baseHash) return `正文替换的基准哈希与 ${issueKey(b.issue)} 当前正文不符。`;
       }
       const d = reply.decision;
+      if ((d.subject === "orphanDesign" || d.subject === "migration" || d.subject === "agendaGap") && d.verdict === "resolved" && reply.drafts.length === 0)
+        return `${d.subject} 的 resolved 裁定必须附带补项草稿；没有草稿不能完结这张票据。`;
       if (d.subject === "seated") {
         const seat = c.seats.find((s) => s.w.requestName === d.requestName);
         const pendingAck = c.pendingAcks.find((p) => p.agentId === d.agentId);
