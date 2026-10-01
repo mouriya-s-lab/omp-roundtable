@@ -240,20 +240,22 @@ function storedVerdict(id: ReplyId, ticket: ObligationId, attempt: number, manif
 export function memberGamma(t: MemberSituation, v: Variant): Built {
   const broken = violations(MEMBER_CONSTRAINTS, t);
   if (broken.length > 0) return infeasible(broken.join("; "));
-  // Each adjudicated failing verdict carries one ruling: the last such gate takes upheld(main) when repairMain holds, the
-  // other takes upheld(owner). An owner repair without a second such gate comes from checks fixNeeded or implDefect.
+  // Main's current-attempt repair can be exposed by a valid failing verdict, stale evidence, or a historical verdict
+  // hidden when no PR remains. Owner work has a distinct verdict or its own implDefect/fixNeeded instruction.
   const vfaGates = (["review", "accept"] as const).filter((g) => (g === "review" ? t.review : t.accept) === "validFailAdjudicated");
-  const mainGate = t.repairMain ? (vfaGates.at(-1) ?? null) : null;
-  const ownerViaVerdict = t.repairOwner && vfaGates.some((g) => g !== mainGate);
-  const ownerSource: "verdict" | "implDefect" | "fixNeeded" | null = !t.repairOwner ? null : ownerViaVerdict ? "verdict" : t.checksDecided === "fixNeeded" ? "fixNeeded" : "implDefect";
+  const staleGates = (["review", "accept"] as const).filter((g) => (g === "review" ? t.review : t.accept) === "stale");
+  const mainGate = t.repairMain ? (vfaGates.at(-1) ?? staleGates.at(-1) ?? (t.ours === "none" ? "accept" : null)) : null;
+  const ownerGate = t.repairOwner ? (vfaGates.filter((g) => g !== mainGate).at(-1) ?? null) : null;
+  const ownerSource: "verdict" | "implDefect" | "fixNeeded" | null = !t.repairOwner ? null : ownerGate !== null ? "verdict" : t.checksDecided === "fixNeeded" ? "fixNeeded" : "implDefect";
 
   const a = new Assembly(v);
   a.designOnly = t.designOnly;
   const head = `h-${v.name}` as Sha;
   const prRef: PrRef = { repo: v.repo, number: v.pr };
   const run = `run-${v.name}`;
-  if (t.ours === "maintainable") {
-    // without a completed deliver the maintainable PR was adopted at convening (W15)
+  const hiddenMain = mainGate === "accept" && t.ours === "none";
+  if (t.ours === "maintainable" || hiddenMain) {
+    // Stamp a real open-PR manifest before closing the historical PR below.
     if (!t.deliverDone) a.adoptPr = prRef;
     a.member = { ...a.member, prs: [prRef] };
     a.prs.push({
@@ -275,10 +277,6 @@ export function memberGamma(t: MemberSituation, v: Variant): Built {
   const submitFor = (answered: ObligationId): void =>
     setM((m) => ({ ...m, submit: { branch: "feat", head, title: "t", body: "b", template: "fourLayer", retryNote: null, answered, applied: true, appliedDesign: [] } }));
 
-  const base0 = classifyOf(a).member;
-  if (base0 === null) return infeasible("γ: member not active in the base assembly");
-  // 1. the submit, checks facts and checks decisions
-  if (t.deliverDone) submitFor(base0.w.ids.deliver);
   if (t.checksRunFixed) setM((m) => ({ ...m, fixedRun: run }));
   if (t.checksDecided !== "none") setM((m) => ({ ...m, checks: { runId: run, verdict: t.checksDecided === "none" ? "rerun" : t.checksDecided, rerunDone: false } }));
   if (ownerSource === "fixNeeded") setM((m) => ({ ...m, fixNeeded: { id: a.replyId(), rationale: "r" } }));
@@ -286,7 +284,8 @@ export function memberGamma(t: MemberSituation, v: Variant): Built {
   if (t.externalBlock && t.checksDecided !== "external") setM((m) => ({ ...m, external: true }));
   // 2. gate verdicts, each adjudicated failing verdict carrying the repair of the target
   for (const gate of ["review", "accept"] as const) {
-    const state = gate === "review" ? t.review : t.accept;
+    const requested = gate === "review" ? t.review : t.accept;
+    const state = hiddenMain && gate === "accept" ? "validFailAdjudicated" : requested;
     if (state === "none") continue;
     const c = classifyOf(a).member;
     if (c === null) return infeasible("γ: member vanished while adding verdicts");
@@ -294,21 +293,36 @@ export function memberGamma(t: MemberSituation, v: Variant): Built {
     const ticket = gate === "review" ? c.w.ids.review : c.w.ids.accept;
     if (current === null || !("head" in current) || ticket === null) return infeasible("γ: no manifest");
     const manifest: Manifest = state === "stale" ? (v.noise ? { ...current, memberBodyHash: "old-body" as Hash } : { ...current, head: "old-head" as Sha }) : current;
-    const pass = state === "validPass" || state === "stale";
-    const verdict: Verdict = { gate, ok: pass, note: pass ? "ok" : "a.ts:1 breaks" };
+    const selectedMain = gate === mainGate;
+    const selectedOwner = gate === ownerGate;
+    const failing = state === "validFailUnadjudicated" || state === "validFailAdjudicated" || state === "superseded" || (state === "stale" && selectedMain);
+    const verdict: Verdict = { gate, ok: !failing, note: failing ? "a.ts:1 breaks" : "ok" };
     const vid = a.replyId();
     const adjudication: FindingVerdict | null =
       state === "superseded"
         ? { kind: "rejected", basis: "b" }
         : state === "validFailAdjudicated"
-          ? gate === mainGate || !t.repairOwner
+          ? selectedMain
             ? { kind: "upheld", responsible: "main" }
-            : { kind: "upheld", responsible: "owner" }
-          : null;
+            : selectedOwner || !t.repairMain
+              ? { kind: "upheld", responsible: "owner" }
+              : { kind: "upheld", responsible: "main" }
+          : state === "stale" && selectedMain
+            ? { kind: "upheld", responsible: "main" }
+            : null;
     // superseded: the verdict was rejected, which moved the slot to the next attempt
     const slot: GateSlot = { attempt: state === "superseded" ? 2 : 1, verdict: storedVerdict(vid, ticket, 1, manifest, verdict, adjudication) };
     const rejected = gate === "review" && adjudication?.kind === "rejected" ? [vid] : [];
     setM((m) => (gate === "review" ? { ...m, review: slot, rejectedFindings: [...m.rejectedFindings, ...rejected] } : { ...m, accept: slot }));
+  }
+  if (hiddenMain) {
+    a.prs = a.prs.map((p) => p.ref.number === v.pr ? { ...p, state: { kind: "closedUnmerged", closedAt: a.now() } } : p);
+  }
+  // Closure advances delivery identity, so seed the submit only after constructing the historical PR.
+  if (t.deliverDone) {
+    const current = classifyOf(a).member;
+    if (current === null) return infeasible("γ: no member for deliver witness");
+    submitFor(current.w.ids.deliver);
   }
   // 3. the fix completed on the current trigger
   if (t.fixDone) {
