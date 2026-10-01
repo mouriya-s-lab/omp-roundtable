@@ -31,12 +31,13 @@
 
 | 票据 | 必须包含 |
 |---|---|
-| `deliver`、`fix` | 交付目标（repo、base、起点 SHA）；要接管或沿用的 PR 与分支；需要合入的设计 commit；需要通读的 issue 与设计章节。PR 正文按 `writing-pr` 选模板：纯文档 PR 用思路要点模板；其他 PR 用四层证据，Layer 2 读回关键行，Layer 4 逐条经真实入口观察正负路径，测试计数只放卫生检查。`fix` 另附触发原因，以及引出它的结论或裁定原文。续作时写明：先检查工作目录里未推送的提交；推送被拒时不强推，改为回复 `Claim(blocked)`。自己的主张在等待裁定期间，可以 `yield` |
+| `deliver`、`fix` | 交付目标（repo、base、起点 SHA）；要接管或沿用的 PR 与分支；需要合入的设计 commit；需要通读的 issue 与设计章节。PR 正文按 `writing-pr` 选模板：纯文档 PR 用思路要点模板；其他 PR 用四层证据，Layer 2 读回关键行，Layer 4 逐条经真实入口观察正负路径，测试计数只放卫生检查。`fix` 另附触发原因与结论或裁定原文。说明新 HEAD 不消费维持修复，只有 PrSubmit 被接受才完结；Main designFix 未回复时暂停 owner 交付，等票据恢复。续作先检查未推送提交；推送被拒不强推，回复 Claim(blocked)。自己的主张等待裁定时可以 yield |
 | review | PR、HEAD、base。按 `review-pr` 依次跑 Gate 1–5，首个失败即停。以 issue 契约为准，不扩大范围；不派审查子代理。此前被驳回、且没有新证据的问题不再提出。问题落在主会话的 commit 上时，在理由里写明 |
 | accept | 在干净的 detached checkout 上确认 HEAD。经真实入口逐条观察验收行的正负路径：纯库在仓库外自写 driver；CLI 用真实命令；Web 走 `skill://agent-browser`；纯文档核对文档间的语义。不复用作者的 driver 与测试，最后跑 repo 校验，不改 repo |
 | postMerge | 对每个交付目标 repo 分别执行。最新的合并发生在议程召集之后时，在该合并提交的干净 checkout 上执行（R5）；发生在召集之前时（遗留项），在当前默认分支 head 的干净 checkout 上执行，该 head 必须包含合并提交。部署型 repo 在 repo 交付规则规定的目标环境里执行。经真实入口逐条观察覆盖成员的验收行，并跑 repo 校验。与本次无关的失败写在理由里，写明为什么无关 |
 | closure | 对每个交付目标 repo，在包含该 repo 全部合并提交的默认分支 head 上，经真实入口逐行核对 parent 的关闭验证，并核对每个子 issue 的终点事实 |
 | Main `decide(*)` | subject 对应的回复原文与证据；`effectFailed` 附这次执行失败的错误原文；该 subject 可选的 verdict 及各自的后果；需要替换的正文段落及其当前哈希。设计路线的适用条件：`defaultFirst` 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒时改选其他路线；`future` 需要同 repo 的后续承载者，没有就附设计承接项的草稿 |
+| Main `designFix` | 当前 attempt 被维持的结论；交付目标 repo/base 与起点 SHA，即使没有可维护 PR。回复真实修复 commit（可引用已经解决设计点的既有契约修正 commit，不造空提交）；Main 回复前没有 owner deliver/fix，回复后由 owner 提交包含所需 commit 的 PrSubmit，再执行 gate |
 | Main `spawn` | 先执行，再回执。registry 中已有请求名匹配、而且不是状态里记录的持有者的可用 agent 时，直接回执；否则用原生 `task` 派出，参数为：`agent`（设置给出的席位 agent 类型：owner 默认 `task:high`，gate 默认 `task:mid`）、`isolated: true`、`name` 取请求名、assignment 取简报。前提：宿主设置 `async.enabled` 为真，并且该 agent 类型没有声明 `blocking: true`，否则主会话会同步等待子席位，席位提问时就会死锁。派出后用 `Decision(seated{agentId})` 回执，agentId 取 `task` 返回的实际 id |
 | Main `report` | 每项的结局，以及 PR 与 issue 的链接、各验收结论的要点；树关闭的结论；意外写回主会话工作 checkout 的路径。报告由主会话在对话里交给操作员，不写到 GitHub |
 | 所有主会话简报 | 圆桌是唯一的协议渠道。子席位 `yield` 时的文字会作为原生消息送达主会话，但它不是回复，不据此行动。末尾给出这张票据的完整回复 JSON：pin 决定的字段由程序填好；需要在整个对象之间选择的 `verdict` 给出一个合法默认值，并列出每个可选对象的完整 JSON；主会话只替换 `<…>` 字符串占位，question 的 `affected` 由主会话列出受影响的成员 |

@@ -18,14 +18,16 @@
 ## W2 gate 进行中有新推送
 
 1. head 从 h 变为 h'。两条结论或两张 gate 票据都变为 `stale`。
-2. 在 h' 上重新给出 gate 票据。pin 不同，请求名也不同，因此由新席位执行。
+2. 没有待回复的维持修复时，在 h' 上重新给出 gate 票据；pin 不同，请求名也不同，由新席位执行。已经维持的修复按 W3 完成，不因新 HEAD 消失。
 3. 旧席位不再持有票据。它如果仍提交结论，`step` 在第 2 步拒绝。
 
 ## W3 review 不通过，裁定维持
 
 1. reviewer 回复不通过（`ok = false`，理由写在 note）→ 结论为 `valid(fail)`，尚未裁定 → Main `decide(findings)`。守卫抑制 gate。
-2. 裁定 `upheld(owner)`。裁定针对的是这条结论本身，不会让它失效 → 出现 owner 待修复项 → Owner `fix`，pin 为 `(h, 结论 id)`，简报附结论的理由。
-3. owner 推送 h' 并回复 `PrSubmit` → 旧结论变为 `stale`，待修复项随之消失 → 在 h' 上重新给出 review 与 accept。
+2. 裁定 `upheld(owner)` 记录在本 attempt。Owner `fix` 的 pin 是这条结论 id，简报附理由；它独立于 gate 的清单有效性。
+3. owner 推送 h' 后，旧 gate 变为 stale，但同一 attempt 的修复仍在，gate 与合并被抑制。包括接管 PR 的 submit 仍为空的情形，推送都不消费票据。
+4. owner 的 PrSubmit 被接受后，slot attempt 加一，旧维持修复结束。先完成 updatePr 的物化，再在 h' 执行新 gate；重复回复不再次推进 attempt。
+5. 裁定 upheld(main) 时先给 Main designFix，暂不给 owner deliver/fix；Main 回复真实修复 commit 后，owner 的票据恢复，其 PrSubmit 必须包含所需 commit。PR 已关闭或被取代时也先结束 Main 修复，再开始新交付；旧 owner 票据不能提前消费 Main 的修复。
 
 ## W4 不通过的结论被驳回或判为范围外
 
@@ -34,7 +36,7 @@ review 或 accept 的不通过结论被裁定为 `rejected` 或 `outOfScope` 时
 ## W4b 本议程的 PR 被放弃后重新交付
 
 1. owner 回复 `Claim(blocked)`（推送被拒）→ Main `decide(claim)` → `replacePr`；或者 P 被人未合并就关闭。
-2. P 不再可维护 → `ours = none`；deliver 的取代事件加一 → attempt + 1 → 新的 `deliver` 与已完结的那张 id 不同。
+2. P 不再可维护，ours 为 none；仍有 Main 设计修复时先给 designFix，结束后才给新的 deliver。deliver 的取代事件加一，新的票据与已完结的那张 id 不同。
 3. owner 推送新分支并回复 `PrSubmit` → `applied` 为假 → `openPr` 创建新 PR 并登记进 `prs`。
 
 ## W5 只改证据的修复

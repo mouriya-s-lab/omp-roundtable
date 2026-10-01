@@ -84,10 +84,10 @@
 | review、accept、postMerge、closure | 槽位里的 attempt，由 `step` 在取代时加一，见下 |
 
 gate 槽位的取代（`step` 执行）：
-- review、accept：对不通过结论的裁定为 `rejected` 或 `outOfScope`；或者裁定为维持，之后 owner 提交了 `PrSubmit`（只改证据的修复）。
+- review、accept：对不通过结论的裁定为 `rejected` 或 `outOfScope`；或者维持修复后的 `PrSubmit` 被接受（包括同 HEAD 的证据修复），槽位 attempt 才加一。拒绝的回复不改变 attempt。
 - postMerge、closure：对失败结论裁定 `reverify`。
 
-槽位里结论的 attempt 小于槽位 attempt 时，这条结论为 `superseded`。review 结论被驳回时，清单本身也会变（它包含「此前被驳回的结论」），两种变化任一发生都换一名新席位。
+槽位里结论的 attempt 小于槽位 attempt 时，这条结论为 `superseded`。被维持的修复由当前 attempt 的裁定维持，不依赖 gate 清单仍有效：HEAD、正文或契约变化只让 gate 失效，不消费修复。`upheld(main)` 先以 `Decision(designFix)` 记录真实修复 commit，之后 owner 的 `PrSubmit` 才能推进 attempt；owner 的同一修复以该回复被接受为终点。review 结论被驳回时，清单与 attempt 的变化任一发生都换一名新席位。
 
 ### 交付单元、成员与对账
 
@@ -132,10 +132,10 @@ gate 槽位的取代（`step` 执行）：
 | 规则 | 义务 |
 |---|---|
 | `claims = pending(k)` | Main `decide(claim)` |
-| `ours = none` | Owner `deliver` |
+| `ours = none` | 有 main 待修复项时先给 Main `designFix`，否则给 Owner `deliver` |
 | 有效的不通过结论还没有裁定 | Main `decide(findings)` |
-| owner 待修复项，或 `mergeable = no`，或 `checks = fail` 且当前失败的 run 不是最近引出过完结 `fix` 的 run | Owner `fix`，pin 为触发原因，按以下优先级取第一个：PR head 与 `submit` 的 head 不同（owner 推送了但还没回复）；被维持的不通过结论；`implDefect` 裁定；`checks` 的 `fixNeeded` 裁定；主会话的 designFix commit 未合入；该成员承载的设计 commit 未合入；冲突；失败的 check run |
-| main 待修复项 | Main `designFix` |
+| 没有 main 待修复项，且满足以下任一条件：有 owner 待修复项；`mergeable = no`；`checks = fail` 且当前失败的 run 尚未引出过完结 `fix` | Owner `fix`，pin 为触发原因，优先级为：当前 attempt 被维持的 owner 结论；`implDefect`；checks 的 `fixNeeded`；head 与 `submit` 不同；Main designFix commit 未合入；该成员承载的设计 commit 未合入；冲突；失败 check run |
+| main 待修复项 | Main `designFix`；它回复真实修复 commit 之前不给出 owner 的 `deliver` 或 `fix`，即使 PR 被关闭或取代 |
 | `checks = fail`，当前失败的 run 已经引出过一次完结的 `fix` | Main `decide(checks)`，pin 为该 run 的 id |
 | review 不是 `valid` | Gate `review` |
 | accept 不是 `valid` | Gate `accept` |
@@ -143,7 +143,7 @@ gate 槽位的取代（`step` 执行）：
 
 **守卫**：可单独测试的不变量，作用于所有规则。
 
-- 有未决的主张、`materialized = pending`、有未裁定的不通过结论，或有任一类待修复项时：不给出 Gate 义务，也不给出 `merge`。
+- 有未决的主张、`materialized = pending`、有未裁定的不通过结论，或有任一类待修复项时：不给出 Gate 义务，也不给出 `merge`。修复以当前 attempt 的维持裁定及其回复为锚点；不把清单失效或新推送当成修复完成。Main 尚未记录设计修复时，已有 owner 交付票据撤回，记录后按所需 commit 恢复。
 - owner 自己的 `noCode`、`split` 或 `blocked` 主张未决时，它的义务照常存在，简报写明「等待裁定，可以 yield」，`yield` 拦截对这张票据放行；`question` 未决时，简报写明暂停依赖该点的部分。
 - 被守卫抑制的 Gate 义务不被任何席位持有。守卫解除后，同名义务重新出现，席位被唤醒或重派。
 

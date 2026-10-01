@@ -677,30 +677,31 @@ function classifyMember(
     accept = evaluateSlot(ms.accept, () => acceptNow);
   }
 
-  // repairs (only while the verdict that produced them is valid)
-  const reviewValid = review === "validFailAdjudicated" ? ms.review.verdict : null;
-  const acceptValid = accept === "validFailAdjudicated" ? ms.accept.verdict : null;
+  // Repairs are owned work on the current attempt, not gate evidence for the current manifest. A push may stale the
+  // verdict while its upheld work is still open; designFix records Main's result and an accepted PrSubmit bumps it.
+  const reviewCurrent = ms.review.verdict?.attempt === ms.review.attempt ? ms.review.verdict : null;
+  const acceptCurrent = ms.accept.verdict?.attempt === ms.accept.attempt ? ms.accept.verdict : null;
   const failedRun = pr !== null && pr.checks.state === "fail" ? pr.checks.failedRunId : null;
   const checksDecided = failedRun !== null && ms.checks !== null && ms.checks.runId === failedRun ? ms.checks.verdict : "none";
   const designFixFor = (v: StoredVerdict): Sha | null => ms.designFixes.find((d) => d.verdictId === v.id)?.commit ?? null;
-  const designFixCommit = [reviewValid, acceptValid].filter((v): v is StoredVerdict => upheld(v, "main")).map(designFixFor).find((c) => c !== null) ?? null;
+  const designFixCommit = [reviewCurrent, acceptCurrent].filter((v): v is StoredVerdict => upheld(v, "main")).map(designFixFor).find((c) => c !== null) ?? null;
   const designFixUnmerged = designFixCommit !== null && pr !== null && !contains(facts, pr.target.repo, pr.head, designFixCommit) ? designFixCommit : null;
   const headMoved = pr !== null && submit !== null && submit.head !== pr.head;
   const designMissing = pr === null ? null : (requiredDesign.find((d) => !contains(facts, pr.target.repo, pr.head, d)) ?? null);
-  const ownerVerdict = [reviewValid, acceptValid].find((v) => upheld(v, "owner")) ?? null;
-  const mainVerdict = [reviewValid, acceptValid].find((v) => v !== null && upheld(v, "main") && designFixFor(v) === null) ?? null;
+  const ownerVerdict = [reviewCurrent, acceptCurrent].find((v) => upheld(v, "owner")) ?? null;
+  const mainVerdict = [reviewCurrent, acceptCurrent].find((v) => v !== null && upheld(v, "main") && designFixFor(v) === null) ?? null;
 
   const fixTrigger: FixTrigger | null =
     pr === null
       ? null
-      : headMoved
-        ? { kind: "headMoved", head: pr.head }
-        : ownerVerdict !== null
-          ? { kind: "verdict", id: ownerVerdict.id }
-          : ms.implDefect !== null
-            ? { kind: "implDefect", id: ms.implDefect.id }
-            : ms.fixNeeded !== null
-              ? { kind: "fixNeeded", id: ms.fixNeeded.id }
+      : ownerVerdict !== null
+        ? { kind: "verdict", id: ownerVerdict.id }
+        : ms.implDefect !== null
+          ? { kind: "implDefect", id: ms.implDefect.id }
+          : ms.fixNeeded !== null
+            ? { kind: "fixNeeded", id: ms.fixNeeded.id }
+            : headMoved
+              ? { kind: "headMoved", head: pr.head }
               : designFixUnmerged !== null
                 ? { kind: "designFix", commit: designFixUnmerged }
                 : designMissing !== null

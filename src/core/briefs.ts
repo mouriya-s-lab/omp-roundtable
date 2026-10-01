@@ -200,6 +200,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
             "- PR 正文按 `writing-pr` 选模板：纯文档 PR 用思路要点模板；其他 PR 用四层证据：Layer 2 读回关键行，Layer 4 逐条经真实入口观察正负路径，测试计数只放卫生检查。",
             "- 发现无需代码、需要拆分，或被阻塞（例如推送被拒——不强推）时，回复 `Claim(noCode|split|blocked)`。",
             "- 续作时：先检查工作目录里未推送的提交。",
+            "- 被维持的修复须由圆桌接受 PrSubmit 才完结，推送新 HEAD 不算回复。主会话的 designFix 尚未回复时，owner 的交付票据暂停；等它重新出现再提交，不用旧票据越过设计修复。",
             input.kind === "fix" && m.fixTrigger !== null
               ? [
                   `- 触发原因：${canonical(m.fixTrigger)}；check run 在 PR 的 checks 页。`,
@@ -333,7 +334,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
           "- upheld(owner)：owner 得到修复票据；upheld(main)：你得到 designFix 票据，在设计分支上修复。",
           "- rejected(依据)：结论作废，该 gate 以新的 attempt 重新执行，review 清单会带上这条被驳回的结论。",
           "- outOfScope(附草稿)：问题移出本 PR，草稿由程序建成新 issue；该 gate 以新的 attempt 重新执行。",
-          `- designGap(route)：改变契约，已有结论失效、gate 重新执行。${ROUTES}`,
+          `- designGap(route)：改变契约，旧 gate 结论失效；已维持的修复仍须完成回复后再执行 gate。${ROUTES}`,
           `- acceptanceMethod：改变契约，须附对成员验收行的正文替换，基准为当前正文哈希 ${input.member.issue?.bodyHash ?? "?"}；gate 重新执行。`,
         ].join("\n"),
         { subject: "findings", verdictId: input.verdict.id, verdict: { kind: "upheld", responsible: "owner" } },
@@ -343,8 +344,12 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       return mainBrief(
         ident,
         "修复设计 commit 上被维持的发现",
-        [replyFact("结论", input.verdict.id, { verdict: input.verdict.verdict, adjudication: input.verdict.adjudication }), memberFacts(input.member)].join("\n"),
-        "在设计分支上修复后，回复 Decision(designFix) 附 commit；之后 owner 得到合入该 commit 的修复票据，gate 重新执行。",
+        [
+          replyFact("结论", input.verdict.id, { verdict: input.verdict.verdict, adjudication: input.verdict.adjudication }),
+          memberFacts(input.member),
+          `- 交付目标：${input.member.entry.target.repo.owner}/${input.member.entry.target.repo.name}，base ${input.member.entry.target.base}，起点：${input.member.startSha ?? `远端 ${input.member.entry.target.base} 分支的当前 head`}。`,
+        ].join("\n"),
+        "先完成本会话的设计修复，再回复 Decision(designFix) 附真实 commit；可以引用已经解决该设计点的既有契约修正 commit，不制造空提交。HEAD 或正文变化不会消费这张票据。回复被接受之前，owner 不持有 deliver/fix；之后 owner 按票据合入所需 commit，并回复 PrSubmit，最后 gate 重新执行。",
         { subject: "designFix", verdictId: input.verdict.id, commit: "<设计分支上修复 commit 的 40 位 sha>" },
       );
     case "decideChecks":

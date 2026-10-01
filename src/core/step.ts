@@ -250,7 +250,8 @@ function applySubmit(state: AgendaState, c: Classified, ob: Obligation, reply: E
   if (w === undefined) return state;
   const { kind: _k, obligation: _o, ...payload } = reply;
   const trigger = ob.kind === "fix" ? w.fixTrigger : null;
-  // A later submit supersedes an adjudicated failing verdict on the same pin (evidence-only fix; core.md §3 尝试身份).
+  // Only an accepted submit supersedes the current adjudicated attempt, whether its head changed or only evidence did.
+  // Main-first rules withhold every PrSubmit ticket until Main has recorded its design-fix result.
   const bump = (slot: GateSlot): GateSlot => (slot.verdict !== null && slot.verdict.adjudication !== null && slot.verdict.attempt === slot.attempt ? { ...slot, attempt: slot.attempt + 1 } : slot);
   return updateMember(state, w.entry.issue, (m) => ({
     ...m,
