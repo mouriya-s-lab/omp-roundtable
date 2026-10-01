@@ -5,19 +5,19 @@ import type { ChecksState, Mergeable } from "./types.ts";
 
 /** Validity of the latest gate verdict relative to the current pin and attempt. */
 export type GateState =
-  | "none" // no verdict for the current attempt
-  | "stale" // a verdict exists but its pin no longer matches
-  | "superseded" // failing verdict whose findings are all rejected/outOfScope
+  | "none" // no verdict in the slot
+  | "stale" // the slot's verdict pin no longer matches the current inputs
+  | "superseded" // the slot's verdict belongs to an earlier attempt (core.md §3 尝试身份)
   | "validPass"
   | "validFailUnadjudicated"
   | "validFailAdjudicated";
 
 /** Seat observation for one required request name (core.md §1 host.seats, §3 spawn/wake). */
 export type SeatState =
-  | "live" // acknowledged holder is live
-  | "parked" // acknowledged holder is parked
-  | "pendingAck" // a usable agent with this name exists but no `seated` receipt points at it
-  | "absent"; // no acknowledged usable holder and no pending agent
+  | "live" // recorded holder is live
+  | "parked" // recorded holder is parked
+  | "pendingAck" // a usable agent with this name exists and is not the recorded holder
+  | "absent"; // no usable recorded holder and no pending agent
 
 export type ClaimKind = "question" | "noCode" | "split" | "blocked";
 
@@ -26,8 +26,6 @@ export interface MemberSituation {
   /** Earliest undecided claim raised in this member context. */
   readonly claim: ClaimKind | "none";
   readonly ours: "none" | "maintainable";
-  readonly foreign: boolean;
-  readonly foreignNoticed: boolean;
   /** Gate-input effects (openPr/updatePr/applyBody/createIssue for contract changes) not yet fulfilled. */
   readonly materialized: "settled" | "pending";
   readonly review: GateState;
@@ -90,13 +88,13 @@ export interface EffectSituation {
   readonly fulfilled: boolean;
   /** Latest execution failure and its adjudication. */
   readonly failure: "none" | "unadjudicated" | "retry" | "external";
-  /** Body-replacement base hash no longer matches and no later replacement supersedes it. */
-  readonly conflict: boolean;
+  /** Body-replacement base hash no longer matches the current body, which is not the target either; and the main session's answer to it. */
+  readonly conflict: "none" | "undecided" | "resolved" | "external";
 }
 
 export interface SeatSlotSituation {
   readonly seat: SeatState;
-  /** Number of `woken` receipts already recorded for the current holder (used only for identity). */
+  /** Some current obligation needs this seat. */
   readonly needed: boolean;
 }
 

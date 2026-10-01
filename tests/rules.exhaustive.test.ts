@@ -41,7 +41,7 @@ import { MEMBER_STALLS } from "./support/stalls.ts";
 
 // Every output kind of every rules function (typed so a new kind is a compile error here).
 const MEMBER_KINDS: Record<MemberKind, true> = {
-  decideClaim: true, deliver: true, noticeForeignPr: true, decideFindings: true, fix: true,
+  decideClaim: true, deliver: true, decideFindings: true, fix: true,
   designFix: true, decideChecks: true, review: true, accept: true, merge: true,
 };
 const RECONCILE_KINDS: Record<ReconcileKind, true> = { close: true, reopen: true, decideReopened: true, decideClosed: true };
@@ -112,7 +112,9 @@ function memberCheck(s: MemberSituation, out: readonly Spec<MemberKind>[]): "ok"
     const ok = s.review === "validPass" && s.accept === "validPass" && s.mergeable === "yes" && s.checks === "pass" && !guard && s.ours === "maintainable";
     if (!ok) return "merge without its preconditions";
   }
-  if (s.ours === "none" && out.some((o) => o.kind !== "deliver" && o.kind !== "decideClaim")) return "PR obligation without a maintainable PR";
+  if (s.ours === "none" && out.some((o) => o.kind !== "deliver" && o.kind !== "decideClaim" && o.kind !== "designFix")) return "PR obligation without a maintainable PR";
+  if (has(out, "designFix") !== s.repairMain) return "designFix differs from Main repair";
+  if (s.repairMain && (has(out, "fix") || has(out, "deliver"))) return "Main repair still assigns fix/deliver";
   if ((has(out, "review") && !gateNeeded(s.review)) || (has(out, "accept") && !gateNeeded(s.accept))) return "gate re-issued over a valid verdict";
   if (s.claim !== "none" && !has(out, "decideClaim")) return "pending claim without decide(claim)";
   for (const o of out) {
@@ -126,7 +128,7 @@ function memberCheck(s: MemberSituation, out: readonly Spec<MemberKind>[]): "ok"
 
 type Holder = Spec<string>["holder"];
 const HOLDER: Record<MemberKind, Holder> = {
-  decideClaim: "main", deliver: "owner", noticeForeignPr: "program", decideFindings: "main", fix: "owner",
+  decideClaim: "main", deliver: "owner", decideFindings: "main", fix: "owner",
   designFix: "main", decideChecks: "main", review: "gate", accept: "gate", merge: "program",
 };
 
@@ -182,7 +184,9 @@ describe("rule layer: exhaustive enumeration (core.md §6.1)", () => {
   test("EffectSituation", () => {
     sweep("EffectSituation", effectDomain, EFFECT_KINDS, effectRules, (s, out) => {
       if (s.fulfilled && out.length > 0) return "fulfilled effect still derived";
-      if (!s.fulfilled && out.length === 0 && !effectWaiting(s)) return "unfulfilled effect neither derived nor waiting";
+      // a conflict the main session resolved without a new replacement leaves nothing to do; derive's stall covers it
+      if (!s.fulfilled && out.length === 0 && !effectWaiting(s) && s.conflict !== "resolved") return "unfulfilled effect neither derived nor waiting";
+      if (s.conflict !== "none" && has(out, "execute")) return "execution over a body-replacement conflict";
       if (s.failure === "unadjudicated" && has(out, "execute")) return "execution not paused after an unadjudicated failure";
       if (s.failure === "external" && has(out, "execute")) return "execution during an external decision";
       return "ok";

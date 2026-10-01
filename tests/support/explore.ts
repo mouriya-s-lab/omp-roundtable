@@ -39,7 +39,7 @@ export type Invariant = (n: Node, d: Derived) => string | null;
  * the invariant would be merged into a clean representative and never checked.
  */
 export function keyOf(w: World): string {
-  const c = classify(w.snap, w.host);
+  const c = classify(w.state, w.facts, w.host);
   const pr = c.member?.w.pr ?? null;
   const hidden = c.member === null || pr === null ? 0 : missingDesignCommits(w, c.member.w.entry.issue, pr.head).length;
   return canonical({ s: situationKey(c), budget: w.budget, missingDesign: hidden > 0 });

@@ -4,27 +4,28 @@
 import type { Classified, ClosureWitness, EffectWitness, MemberWitness, ReconcileWitness, SeatWitness, SubjectWitness, Unit, VerificationWitness } from "./classify.ts";
 import { canonical, issueKey } from "./identity.ts";
 import type { MemberSituation } from "./situation.ts";
-import type { AgentId, Hash, IssueRef, Policy, PrRef, StoredRecord } from "./types.ts";
+import type { AgentId, Decision, EffectFailure, Hash, IssueRef, PendingClaim, Policy, PrRef, StoredVerdict } from "./types.ts";
 
 export type BriefInput =
   | { readonly kind: "deliver" | "fix"; readonly member: MemberWitness; readonly situation: MemberSituation }
   | { readonly kind: "review" | "accept"; readonly member: MemberWitness }
   | { readonly kind: "postMerge"; readonly verification: VerificationWitness }
   | { readonly kind: "closure"; readonly closure: ClosureWitness }
-  | { readonly kind: "decideClaim"; readonly member: MemberWitness; readonly claim: StoredRecord }
-  | { readonly kind: "decideVerificationClaim"; readonly claim: StoredRecord; readonly rowOwners: readonly { readonly issue: IssueRef; readonly bodyHash: Hash | null }[] }
-  | { readonly kind: "decideFindings"; readonly member: MemberWitness; readonly verdict: StoredRecord }
-  | { readonly kind: "designFix"; readonly member: MemberWitness; readonly verdict: StoredRecord }
-  | { readonly kind: "decideChecks"; readonly member: MemberWitness }
-  | { readonly kind: "decideReopened" | "decideClosed"; readonly reconcile: ReconcileWitness }
-  | { readonly kind: "decidePostMergeFail"; readonly verification: VerificationWitness; readonly verdict: StoredRecord }
-  | { readonly kind: "decideClosureFail"; readonly closure: ClosureWitness; readonly verdict: StoredRecord }
+  | { readonly kind: "decideClaim"; readonly member: MemberWitness; readonly claim: PendingClaim; readonly claimBodyHash: Hash | null }
+  | { readonly kind: "decideVerificationClaim"; readonly claim: PendingClaim; readonly claimBodyHash: Hash | null; readonly rowOwners: readonly { readonly issue: IssueRef; readonly bodyHash: Hash | null }[] }
+  | { readonly kind: "decideFindings"; readonly member: MemberWitness; readonly verdict: StoredVerdict }
+  | { readonly kind: "designFix"; readonly member: MemberWitness; readonly verdict: StoredVerdict }
+  | { readonly kind: "decideChecks"; readonly member: MemberWitness; readonly pr: PrRef; readonly runId: string }
+  | { readonly kind: "decideReopened"; readonly reconcile: ReconcileWitness; readonly event: string }
+  | { readonly kind: "decideClosed"; readonly reconcile: ReconcileWitness; readonly event: string; readonly bodyHash: Hash }
+  | { readonly kind: "decidePostMergeFail"; readonly verification: VerificationWitness; readonly verdict: StoredVerdict }
+  | { readonly kind: "decideClosureFail"; readonly closure: ClosureWitness; readonly verdict: StoredVerdict }
   | { readonly kind: "decideSubject"; readonly subject: SubjectWitness }
-  | { readonly kind: "decideEffectFailed" | "decideEffectConflict"; readonly effect: EffectWitness }
+  | { readonly kind: "decideEffectFailed"; readonly effect: EffectWitness; readonly failure: EffectFailure }
+  | { readonly kind: "decideEffectConflict"; readonly effect: EffectWitness }
   | { readonly kind: "report"; readonly units: readonly Unit[] }
-  | { readonly kind: "spawn"; readonly seat: SeatWitness; readonly acknowledgeOnly: boolean; readonly pending: AgentId | null; readonly assignment: string | null }
+  | { readonly kind: "spawn"; readonly seat: SeatWitness; readonly acknowledgeOnly: boolean; readonly pending: AgentId | null; readonly agent: string | null; readonly assignment: string | null }
   | { readonly kind: "acknowledge"; readonly requestName: string; readonly agent: AgentId; readonly previous: AgentId | null }
-  | { readonly kind: "wake"; readonly seat: SeatWitness; readonly agent: AgentId }
   | { readonly kind: "stall"; readonly classified: Classified }
   | { readonly kind: "program"; readonly what: string };
 
@@ -37,8 +38,6 @@ export interface BriefIdentity {
   readonly workDir: string | null;
   readonly pin: unknown;
   readonly parent: IssueRef | null;
-  /** Agenda issue: every record (reply, decision) is a signed comment on it. */
-  readonly agenda: IssueRef;
 }
 
 const issueUrl = (i: IssueRef): string => `https://github.com/${i.repo.owner}/${i.repo.name}/issues/${i.number}`;
@@ -52,7 +51,7 @@ const SEAT_DIVISION = [
   "## 目标 repo 规则",
   "- 动手前先读目标 repo 的 `AGENTS.md`、`CLAUDE.md` 与 rules，并遵守。",
   "## 证据",
-  "- 回复一律通过圆桌端口工具提交；证据写进回复载荷本身。`local://` 只在本会话可读，不能作为记录中的证据。不限制长度。",
+  "- 回复一律通过圆桌端口工具提交；证据写进回复载荷本身。`local://` 只在本会话可读，不能作为回复中的证据。不限制长度。",
 ].join("\n");
 
 function identityBlock(ident: BriefIdentity, completion: string): string {
@@ -64,7 +63,6 @@ function identityBlock(ident: BriefIdentity, completion: string): string {
     ident.workDir === null ? "" : `- 工作目录：${ident.workDir}。在这里基于远端提交另建 clone 或 worktree，不在继承来的隔离工作区里改动。`,
     `- pin：${canonical(ident.pin)}`,
     ident.parent === null ? "" : `- parent：${issueUrl(ident.parent)}`,
-    `- 议程 issue（全部记录所在）：${issueUrl(ident.agenda)}`,
     `- 完结方式：${completion}`,
   ]
     .filter((l) => l !== "")
@@ -77,15 +75,76 @@ function seatBrief(ident: BriefIdentity, completion: string, sections: readonly 
     .join("\n\n");
 }
 
-function mainBrief(ident: BriefIdentity, title: string, facts: string, options: string): string {
+/**
+ * A decision as the reply template shows it: the fields the pin fixes, filled in; a valid default where the main
+ * session chooses among whole objects; and `<…>` string placeholders only for leaf strings it writes itself.
+ */
+type DecisionTemplate = { readonly subject: Decision["subject"] } & Readonly<Record<string, unknown>>;
+
+/** Main briefs end with the exact port call, so a cheap model fills leaves instead of reconstructing the reply schema. */
+function mainBrief(ident: BriefIdentity, title: string, facts: string, options: string, decision: DecisionTemplate, choices: readonly string[] = []): string {
+  const reply = { kind: "decision", decision, rationale: "<裁定理由>" };
   return [
     identityBlock({ ...ident, kind: `${ident.kind}（主会话）：${title}` }, "用端口回复对应的 `Decision`；只有回复才算消费这张票据。"),
-    "- 圆桌是唯一的协议渠道。子席位 yield 时的文字会作为原生消息送达你，但它不是记录，不据此行动。",
+    "- 圆桌是唯一的协议渠道。子席位 yield 时的文字会作为原生消息送达你，但它不是回复，不据此行动。",
     "## 事实",
     facts,
     "## 可选裁定与要求",
     options,
+    "## 回复",
+    [
+      `调用 roundtable：op "reply"，ticket "${ident.id}"，reply 为下面的 JSON。`,
+      "- 把 `<…>` 字符串占位整体换成你的内容（连同引号一起写成 JSON 字符串）。",
+      ...(choices.length === 0 ? [] : ["- `verdict` 给的是一个合法的默认值；选别的裁定时，把整个 `verdict` 值换成下列之一：", ...choices.map((c) => `  - \`${c}\``)]),
+      "- 其余字段由程序按票据填好，不要改动；question 的 `affected` 例外，列出受这次契约裁定影响的全部成员。",
+      "- 需要时加 `drafts`、`bodyReplacements`。",
+    ].join("\n"),
+    `\`\`\`json\n${JSON.stringify(reply, null, 1)}\n\`\`\``,
   ].join("\n\n");
+}
+
+const ROUTE_SHAPES =
+  'route 为 {"kind":"defaultFirst","commit":"<40 位 sha>","migration":null} | {"kind":"withPr","commit":"<40 位 sha>","designBranch":"<分支>"} | {"kind":"future","commit":"<40 位 sha>","carrier":{"repo":{"owner":"<owner>","name":"<name>"},"number":<N>}}';
+const DRAFT_SHAPE =
+  'Draft 为 {"index":0,"repo":{"owner":"<owner>","name":"<name>"},"title":"<标题>","body":"<正文>","anchor":{"kind":"outsideAgenda"},"target":{"repo":{"owner":"<owner>","name":"<name>"},"base":"<base>"},"designOnly":false}';
+
+/** Question verdicts; `implDefect` only where the asker owns code to repair (a member context). */
+function questionChoices(memberContext: boolean): string[] {
+  return [
+    '{"kind":"answered"}',
+    '{"kind":"outOfDomain"}',
+    ...(memberContext ? ['{"kind":"implDefect"}'] : []),
+    '{"kind":"acceptanceMethod"}',
+    `{"kind":"designGap","route":<route>}，其中 ${ROUTE_SHAPES}`,
+  ];
+}
+
+const FINDING_CHOICES = [
+  '{"kind":"upheld","responsible":"owner"}',
+  '{"kind":"upheld","responsible":"main"}',
+  '{"kind":"rejected","basis":"<依据>"}',
+  `{"kind":"outOfScope","draft":<Draft>}，其中 ${DRAFT_SHAPE}`,
+  `{"kind":"designGap","route":<route>}，其中 ${ROUTE_SHAPES}`,
+  '{"kind":"acceptanceMethod"}',
+];
+
+/** The decision a pending claim is answered with, by claim kind, and the whole-object verdict choices. */
+function claimTemplate(claim: PendingClaim, affected: readonly IssueRef[], claimBodyHash: Hash | null): { decision: DecisionTemplate; choices: string[] } {
+  switch (claim.claim.kind) {
+    case "question":
+      return { decision: { subject: "question", claim: claim.id, verdict: { kind: "answered" }, affected }, choices: questionChoices(claim.claim.context.kind === "member") };
+    case "noCode":
+    case "split":
+      if (claimBodyHash === null) throw new Error(`claim ${claim.id}: member ${issueKey(claim.claim.member)} has no body hash in the facts`);
+      return {
+        decision: { subject: claim.claim.kind === "noCode" ? "noCodeClaim" : "splitClaim", claim: claim.id, member: claim.claim.member, bodyHash: claimBodyHash, verdict: "<confirmed 或 refuted>" },
+        choices: [],
+      };
+    case "blocked":
+      return { decision: { subject: "blockedClaim", claim: claim.id, verdict: "<replacePr、external 或 refuted>" }, choices: [] };
+    default:
+      return assertNever(claim.claim);
+  }
 }
 
 function readingList(m: MemberWitness, ident: BriefIdentity): string {
@@ -93,7 +152,7 @@ function readingList(m: MemberWitness, ident: BriefIdentity): string {
     "## 必读（动手前通读全文，不以 grep 代替）",
     `- issue 全文与全部评论：${issueUrl(m.entry.issue)}`,
     ident.parent === null ? "" : `- parent 的契约与设计修正评论：${issueUrl(ident.parent)}`,
-    m.contractDecisions.length === 0 ? "" : `- 适用的契约裁定记录：${m.contractDecisions.join(", ")}（议程 issue ${issueUrl(ident.agenda)} 上的签名评论）`,
+    m.contractDecisions.length === 0 ? "" : `- 适用的契约裁定：${m.contractDecisions.join(", ")}。它们的内容已写进 issue 正文与下列设计 commit。`,
     "- issue 列出的全部设计章节、契约类型与例子。",
   ]
     .filter((l) => l !== "")
@@ -103,8 +162,11 @@ function readingList(m: MemberWitness, ident: BriefIdentity): string {
 const ROUTES =
   "设计路线：defaultFirst 仅在 umbrella 或 repo 约定契约修正先落默认分支、且 repo 规则与权限允许直接提交时可选，推送被拒就改选其他路线；withPr 的 commit 在设计分支上，由发现或提问所在的成员合入；future 需要同 repo 的后续承载者，没有就附设计承接项的草稿。";
 
-function recordFact(label: string, r: StoredRecord, ident: BriefIdentity): string {
-  return `- ${label} ${r.id}（议程 issue ${issueUrl(ident.agenda)} 上的签名评论）：${canonical(r.body)}`;
+const VERDICT_COMPLETION =
+  "用端口回复 `verdict`：`ok` 为 true 或 false，`note` 写理由（不通过时写清问题、位置与复现方式）。head、验收行与观察到的提交由程序按票据的 pin 盖入，不用填写。";
+
+function replyFact(label: string, id: string, payload: unknown): string {
+  return `- ${label} ${id}：${canonical(payload)}`;
 }
 
 function memberFacts(m: MemberWitness): string {
@@ -134,12 +196,19 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
             "## 交付",
             `- 交付目标：${m.entry.target.repo.owner}/${m.entry.target.repo.name}，base ${m.entry.target.base}，起点：${m.startSha ?? `远端 ${m.entry.target.base} 分支的当前 head`}。`,
             m.pr === null ? "- 新开分支；PR 由程序依据你的 PrSubmit 创建。" : `- 沿用 PR ${prUrl(m.pr.ref)}，当前 head ${m.pr.head}。`,
-            m.designCommits.length > 0 ? `- 必须合入的设计 commit：${m.designCommits.join(", ")}（admit 会检查 head 是否包含它们）。` : "",
+            m.designCommits.length > 0 ? `- 必须合入的设计 commit：${m.designCommits.join(", ")}（圆桌会检查 head 是否包含它们）。` : "",
             "- PR 正文按 `writing-pr` 选模板：纯文档 PR 用思路要点模板；其他 PR 用四层证据：Layer 2 读回关键行，Layer 4 逐条经真实入口观察正负路径，测试计数只放卫生检查。",
             "- 发现无需代码、需要拆分，或被阻塞（例如推送被拒——不强推）时，回复 `Claim(noCode|split|blocked)`。",
             "- 续作时：先检查工作目录里未推送的提交。",
+            "- 被维持的修复须由圆桌接受 PrSubmit 才完结，推送新 HEAD 不算回复。主会话的 designFix 尚未回复时，owner 的交付票据暂停；等它重新出现再提交，不用旧票据越过设计修复。",
             input.kind === "fix" && m.fixTrigger !== null
-              ? `- 触发原因：${canonical(m.fixTrigger)}；其中的记录 id 是议程 issue ${issueUrl(ident.agenda)} 上的签名评论，check run 在 PR 的 checks 页。`
+              ? [
+                  `- 触发原因：${canonical(m.fixTrigger)}；check run 在 PR 的 checks 页。`,
+                  m.ownerVerdict === null ? "" : replyFact("引出修复的结论", m.ownerVerdict.id, { verdict: m.ownerVerdict.verdict, adjudication: m.ownerVerdict.adjudication }),
+                  m.repairRationale === null ? "" : `- 主会话裁定的理由：${m.repairRationale}`,
+                ]
+                  .filter((l) => l !== "")
+                  .join("\n")
               : "",
             pause,
           ]
@@ -153,14 +222,14 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       const m = input.member;
       return seatBrief(
         ident,
-        "用端口回复 `Verdict(review)`：观察到的 head、Gate 1–5 各自状态、每个发现的 file:line、后果、复现命令、责任人。",
+        VERDICT_COMPLETION,
         [
           readingList(m, ident),
           [
             "## 做法",
             `- PR ${m.pr === null ? "?" : prUrl(m.pr.ref)}，HEAD ${m.pr?.head ?? "?"}，base ${m.entry.target.base}。在工作目录里干净 detached checkout 该 HEAD 并确认；HEAD 变化就停下回复。`,
             "- 先读 `skill://review-pr`，依次跑 Gate 1–5，首个失败即停；以 issue 契约为准，不扩大范围；不派审查子代理。",
-            "- 此前被驳回、且没有新证据的发现不再提出。落在主会话 commit 上的发现，责任人写 main。",
+            "- 此前被驳回、且没有新证据的问题不再提出。问题落在主会话的 commit 上时，在 note 里写明。",
           ].join("\n"),
         ],
         policy,
@@ -170,7 +239,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       const m = input.member;
       return seatBrief(
         ident,
-        "用端口回复 `Verdict(accept)`：观察到的 head、每条验收行 id 的命令、输出与判定、未覆盖项、无关失败。",
+        `${VERDICT_COMPLETION} ok 表示每一条验收行都通过。`,
         [
           readingList(m, ident),
           [
@@ -187,7 +256,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
       const merges = v.manifest.gate === "postMerge" ? v.manifest.merges.map((o) => `${o.repo.owner}/${o.repo.name}@${o.commit}`).join(", ") : "";
       return seatBrief(
         ident,
-        "用端口回复 `Verdict(postMerge)`：每个 repo 观察到的提交、每条验收行的命令、输出与判定、无关失败（写明为什么无关）。",
+        `${VERDICT_COMPLETION} ok 表示覆盖成员的每一条验收行都通过；与本次无关的失败写在 note 里并写明为什么无关。`,
         [
           [
             "## 必读",
@@ -208,7 +277,7 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
     case "closure":
       return seatBrief(
         ident,
-        "用端口回复 `Verdict(closure)`：每个 repo 观察到的提交、parent 关闭验证逐行结果。",
+        `${VERDICT_COMPLETION} ok 表示 parent 关闭验证的每一行都通过。`,
         [
           [
             "## 做法",
@@ -218,11 +287,12 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         ],
         policy,
       );
-    case "decideClaim":
+    case "decideClaim": {
+      const t = claimTemplate(input.claim, [input.member.entry.issue], input.claimBodyHash);
       return mainBrief(
         ident,
         "裁定契约问题或主张",
-        [recordFact("主张", input.claim, ident), memberFacts(input.member)].join("\n"),
+        [replyFact("主张", input.claim.id, input.claim.claim), memberFacts(input.member)].join("\n"),
         [
           "question：",
           "- answered 或 outOfDomain：主张结束，owner 按你的答复继续原票据。",
@@ -232,13 +302,17 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
           "noCode / split：confirmed 改变结局（noCode 结束该成员；split 须附拆分后的正文替换与草稿）；refuted 让 owner 继续原票据。",
           "blocked：replacePr 放弃当前 PR，owner 以新的 attempt 重新交付；external 让该成员进入等待集合，须立即报告操作员；refuted 让 owner 继续。",
         ].join("\n"),
+        t.decision,
+        t.choices,
       );
-    case "decideVerificationClaim":
+    }
+    case "decideVerificationClaim": {
+      const t = claimTemplate(input.claim, input.rowOwners.map((o) => o.issue), input.claimBodyHash);
       return mainBrief(
         ident,
         "裁定验收席位的契约问题",
         [
-          recordFact("主张", input.claim, ident),
+          replyFact("主张", input.claim.id, input.claim.claim),
           ...input.rowOwners.map((o) => `- 验收行所在 issue：${issueUrl(o.issue)}，当前正文哈希 ${o.bodyHash ?? "?"}`),
         ].join("\n"),
         [
@@ -246,98 +320,110 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
           `- designGap(route)：改变契约。${ROUTES}`,
           "- acceptanceMethod：改变契约，须附对上列验收行所在 issue 之一的正文替换，基准为该 issue 的当前正文哈希；验收以新的验收行重新执行。",
         ].join("\n"),
+        t.decision,
+        t.choices,
       );
+    }
     case "decideFindings":
       return mainBrief(
         ident,
-        "裁定 gate 发现",
-        [recordFact("结论", input.verdict, ident), memberFacts(input.member)].join("\n"),
+        "裁定 gate 的不通过结论",
+        [replyFact("结论", input.verdict.id, input.verdict.verdict), memberFacts(input.member)].join("\n"),
         [
-          "对每个发现分别裁定：",
+          "对这条结论给出一个裁定：",
           "- upheld(owner)：owner 得到修复票据；upheld(main)：你得到 designFix 票据，在设计分支上修复。",
-          "- rejected(依据)：发现作废；这条结论的发现全部为 rejected 或 outOfScope 时，该 gate 以新的 attempt 重新执行，review 清单会带上被驳回的发现。",
-          "- outOfScope(附草稿)：发现移出本 PR，草稿由程序建成新 issue。",
-          `- designGap(route)：改变契约，已有结论失效、gate 重新执行。${ROUTES}`,
+          "- rejected(依据)：结论作废，该 gate 以新的 attempt 重新执行，review 清单会带上这条被驳回的结论。",
+          "- outOfScope(附草稿)：问题移出本 PR，草稿由程序建成新 issue；该 gate 以新的 attempt 重新执行。",
+          `- designGap(route)：改变契约，旧 gate 结论失效；已维持的修复仍须完成回复后再执行 gate。${ROUTES}`,
           `- acceptanceMethod：改变契约，须附对成员验收行的正文替换，基准为当前正文哈希 ${input.member.issue?.bodyHash ?? "?"}；gate 重新执行。`,
         ].join("\n"),
+        { subject: "findings", verdictId: input.verdict.id, verdict: { kind: "upheld", responsible: "owner" } },
+        FINDING_CHOICES,
       );
     case "designFix":
       return mainBrief(
         ident,
         "修复设计 commit 上被维持的发现",
-        [recordFact("结论", input.verdict, ident), memberFacts(input.member)].join("\n"),
-        "在设计分支上修复后，回复 Decision(designFix) 附 commit；之后 owner 得到合入该 commit 的修复票据，gate 重新执行。",
+        [
+          replyFact("结论", input.verdict.id, { verdict: input.verdict.verdict, adjudication: input.verdict.adjudication }),
+          memberFacts(input.member),
+          `- 交付目标：${input.member.entry.target.repo.owner}/${input.member.entry.target.repo.name}，base ${input.member.entry.target.base}，起点：${input.member.startSha ?? `远端 ${input.member.entry.target.base} 分支的当前 head`}。`,
+        ].join("\n"),
+        "先完成本会话的设计修复，再回复 Decision(designFix) 附真实 commit；可以引用已经解决该设计点的既有契约修正 commit，不制造空提交。HEAD 或正文变化不会消费这张票据。回复被接受之前，owner 不持有 deliver/fix；之后 owner 按票据合入所需 commit，并回复 PrSubmit，最后 gate 重新执行。",
+        { subject: "designFix", verdictId: input.verdict.id, commit: "<设计分支上修复 commit 的 40 位 sha>" },
       );
     case "decideChecks":
       return mainBrief(
         ident,
         "checks 在同一个 head 上反复失败",
-        [`- 失败 run：${input.member.failedRun ?? "?"}（owner 已就这个 run 完成过一次修复）`, memberFacts(input.member)].join("\n"),
+        [`- 失败 run：${input.runId}（owner 已就这个 run 完成过一次修复）`, memberFacts(input.member)].join("\n"),
         [
           "- rerun：程序重跑 checks；之后仍失败，交给下一次 decide(checks)。",
           "- fixNeeded：owner 得到修复票据，须推送新 head。",
           "- external：该成员进入等待集合，须立即报告操作员。",
         ].join("\n"),
+        { subject: "checks", pr: input.pr, runId: input.runId, verdict: "<rerun、fixNeeded 或 external>" },
       );
     case "decideReopened":
       return mainBrief(
         ident,
         "结局确立后 issue 被重新打开",
-        `- 成员：${issueUrl(input.reconcile.member)}\n- 重开事件：${input.reconcile.eventForDecision ?? "?"}`,
+        `- 成员：${issueUrl(input.reconcile.member)}\n- 重开事件：${input.event}`,
         [
           "- restore：程序重新关闭该 issue。",
           "- correction(附修正草稿，锚点 correctionOf)：草稿建成新 issue 并进入议程；单元重新通过 postMerge 之后，程序关闭该 issue。",
           "- reopenAccepted（仅限结局为 noCode 的成员）：撤销 noCode 确认，成员回到待交付。",
         ].join("\n"),
+        { subject: "reopened", member: input.reconcile.member, event: input.event, verdict: "<restore、correction 或 reopenAccepted>" },
       );
     case "decideClosed":
       return mainBrief(
         ident,
         "待交付成员已被关闭",
-        `- 成员：${issueUrl(input.reconcile.member)}\n- 关闭事件：${input.reconcile.eventForDecision ?? "?"}\n- 当前正文哈希：${input.reconcile.bodyHash ?? "?"}`,
+        `- 成员：${issueUrl(input.reconcile.member)}\n- 关闭事件：${input.event}\n- 当前正文哈希：${input.bodyHash}`,
         [
           "- confirmedNoCode(附理由)：成员结局为 noCode，裁定钉住当前正文哈希；正文之后变化则失效。",
           "- reopen：程序重新打开该 issue，成员继续交付。",
         ].join("\n"),
+        { subject: "closed", member: input.reconcile.member, event: input.event, bodyHash: input.bodyHash, verdict: "<confirmedNoCode 或 reopen>" },
       );
     case "decidePostMergeFail":
       return mainBrief(
         ident,
         "合并后验收失败",
-        recordFact("结论", input.verdict, ident),
+        replyFact("结论", input.verdict.id, input.verdict.verdict),
         [
           "- correction(附修正草稿，锚点 correctionOf)：草稿建成新 issue 并插入议程，修正落地后再验收。",
           "- reverify：以新的 attempt 在同一提交上重新验收。",
         ].join("\n"),
+        { subject: "postMergeFail", verdictId: input.verdict.id, verdict: "<correction 或 reverify>" },
       );
     case "decideClosureFail":
       return mainBrief(
         ident,
         "树关闭验收失败",
-        recordFact("结论", input.verdict, ident),
+        replyFact("结论", input.verdict.id, input.verdict.verdict),
         ["- 补项草稿：建成新 issue 并插入议程，落地后再做关闭验收。", "- reverify：以新的 attempt 重新做关闭验收。"].join("\n"),
+        { subject: "closureFail", verdictId: input.verdict.id, verdict: "<correction 或 reverify>" },
       );
     case "decideSubject":
       return mainBrief(
         ident,
         `裁定 ${input.subject.subject}`,
-        input.subject.subject === "unrelated" ? recordFact("结论", input.subject.verdict, ident) : `- ${canonical(input.subject)}`,
-        input.subject.subject === "unrelated"
-          ? "- 附草稿（锚点「不进议程」）：把无关失败建成新 issue；它不阻塞当前单元。"
-          : [
-              "- resolved(附草稿或插入)：补上缺失的承载者、迁移或议程项。",
-              "- external：进入等待集合，须立即报告操作员。",
-            ].join("\n"),
+        `- ${canonical(input.subject)}`,
+        ["- resolved(附草稿或插入)：补上缺失的承载者、迁移或议程项。", "- external：进入等待集合，须立即报告操作员。"].join("\n"),
+        { subject: input.subject.subject, key: input.subject.key, verdict: "<resolved 或 external>" },
       );
     case "decideEffectFailed":
       return mainBrief(
         ident,
         "程序效应执行失败",
-        `- 效应 ${input.effect.id}（${input.effect.target.kind}）：${canonical(input.effect.target)}`,
+        [`- 效应 ${input.effect.id}（${input.effect.target.kind}）：${canonical(input.effect.target)}`, `- 失败原因：${input.failure.error}`].join("\n"),
         [
           "- retry：只放行这一次失败，程序重新执行；再失败会得到新的票据。",
           "- external：该裁定有效期间不再执行，进入等待集合，须立即报告操作员。",
         ].join("\n"),
+        { subject: "effectFailed", effect: input.effect.id, failedAt: input.failure.at, verdict: "<retry 或 external>" },
       );
     case "decideEffectConflict":
       return mainBrief(
@@ -345,38 +431,50 @@ export function briefFor(input: BriefInput, ident: BriefIdentity, policy: Policy
         "正文替换的基准哈希已不符",
         `- 效应 ${input.effect.id}：${canonical(input.effect.target)}`,
         `- 回复 Decision(stall{key: ${input.effect.conflictKey}})：resolved 时附上以当前正文哈希为基准的新替换，它取代这次冲突的替换；external 表示外部阻塞，须立即报告操作员。`,
+        { subject: "stall", key: input.effect.conflictKey, verdict: "<resolved 或 external>" },
       );
     case "report":
       return mainBrief(
         ident,
         "交付完成，写给操作员的汇总",
         input.units.map((u) => u.members.map((m) => issueUrl(m.issue)).join(" → ")).join("\n"),
-        "列出每项结局与 PR、issue、验收记录链接；树关闭结论；意外写回主会话工作 checkout 的路径。回复 Decision(report)，它会写到议程 issue 上。",
+        "列出每项结局与 PR、issue 链接，以及各验收结论的要点；树关闭结论；意外写回主会话工作 checkout 的路径。在对话里把报告交给操作员，然后回复 Decision(report)。",
+        { subject: "report", summary: "<写给操作员的汇总原文>" },
       );
-    case "spawn":
-      return input.acknowledgeOnly
-        ? mainBrief(ident, "回执已派出的席位", `请求名 ${input.seat.requestName}，待回执 agent ${input.pending ?? "?"}`, "先执行、再回执：它已存在，直接回复 Decision(seated{agentId})。")
-        : mainBrief(
-            ident,
-            "派出席位",
-            `请求名 ${input.seat.requestName}（${input.seat.role}），成员 ${issueUrl(input.seat.issue)}`,
-            [
-              "先执行、再回执：用原生 `task` 派出；参数 agent 为 owner→task:high、其他→task:mid；isolated: true；name 取请求名；assignment 取下面的简报原文。",
-              "前提：宿主设置 async.enabled 为真，并且该 agent 类型没有声明 blocking: true。",
-              "派出后回复 Decision(seated{agentId})，agentId 取 task 返回的实际 id。",
-              input.assignment === null ? "" : `\n---\n${input.assignment}`,
-            ].join("\n"),
-          );
+    case "spawn": {
+      if (input.acknowledgeOnly) {
+        if (input.pending === null) throw new Error(`spawn ${input.seat.requestName}: acknowledge-only without a pending agent`);
+        const seated: DecisionTemplate = { subject: "seated", requestName: input.seat.requestName, previous: input.seat.holder, agentId: input.pending };
+        return mainBrief(ident, "回执已派出的席位", `请求名 ${input.seat.requestName}，待回执 agent ${input.pending}`, "先执行、再回执：它已存在，直接回复 seated。", seated);
+      }
+      const seated: DecisionTemplate = { subject: "seated", requestName: input.seat.requestName, previous: input.seat.holder, agentId: "<task 返回的实际 id>" };
+      const brief = mainBrief(
+        ident,
+        "派出席位",
+        `请求名 ${input.seat.requestName}（${input.seat.role}），成员 ${issueUrl(input.seat.issue)}`,
+        [
+          `先执行、再回执：用原生 \`task\` 派出；参数 agent 为 ${input.agent ?? "?"}；isolated: true；name 取请求名；assignment 取本票据末尾「assignment」一节的原文。`,
+          "前提：宿主设置 async.enabled 为真，并且该 agent 类型没有声明 blocking: true。",
+          "派出后回复 seated，agentId 取 task 返回的实际 id。",
+        ].join("\n"),
+        seated,
+      );
+      return input.assignment === null ? brief : `${brief}\n\n## assignment（原文）\n\n${input.assignment}`;
+    }
     case "acknowledge":
-      return mainBrief(ident, "回执已存在的席位", `请求名 ${input.requestName}，agent ${input.agent}，上一任 ${input.previous ?? "无"}`, "直接回复 Decision(seated{agentId})。");
-    case "wake":
-      return mainBrief(ident, "唤醒席位", `agent ${input.agent}（请求名 ${input.seat.requestName}，成员 ${issueUrl(input.seat.issue)}）`, "先回执、再执行：先回复 Decision(woken{agentId})，再用原生 `write agent://<id>` 唤醒。");
+      return mainBrief(ident, "回执已存在的席位", `请求名 ${input.requestName}，agent ${input.agent}，上一任 ${input.previous ?? "无"}`, "直接回复 seated。", {
+        subject: "seated",
+        requestName: input.requestName,
+        previous: input.previous,
+        agentId: input.agent,
+      });
     case "stall":
       return mainBrief(
         ident,
         "停滞：推导不出任何义务，也不在等待集合里",
         canonical(input.classified.stall),
-        `回复 Decision(stall{key: ${input.classified.stall.key}})：resolved 附上补充事实（草稿、插入）；external 表示外部阻塞，须立即报告操作员。`,
+        "resolved 附上补充事实（草稿、插入）；external 表示外部阻塞，须立即报告操作员。",
+        { subject: "stall", key: input.classified.stall.key, verdict: "<resolved 或 external>" },
       );
     case "program":
       return `程序效应：${input.what}（${ident.id}）`;

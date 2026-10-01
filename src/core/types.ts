@@ -1,16 +1,18 @@
 // Domain types for the round-table core. Semantics: docs/design/core.md §1 and §3.
-// Everything here is plain immutable data; parsing from GitHub or local files happens in store.
+// Everything here is plain immutable data; reading GitHub and the local state file happens in store.
 
 declare const brand: unique symbol;
 export type Brand<T, B extends string> = T & { readonly [brand]: B };
 
 export type Sha = Brand<string, "Sha">;
 export type Hash = Brand<string, "Hash">;
-export type RecordId = Brand<string, "RecordId">;
+/** Identity of an accepted reply (claim, verdict, decision): hash of the ticket it answered and its payload. */
+export type ReplyId = Brand<string, "ReplyId">;
 export type EventId = Brand<string, "EventId">;
 export type AgentId = Brand<string, "AgentId">;
 export type DraftId = Brand<string, "DraftId">;
 export type ObligationId = Brand<string, "ObligationId">;
+export type AgendaId = Brand<string, "AgendaId">;
 export type Millis = Brand<number, "Millis">;
 
 export interface RepoRef {
@@ -33,8 +35,6 @@ export interface DeliveryTarget {
   readonly base: string;
 }
 
-// ---------------------------------------------------------------- agenda
-
 export interface ConvenedEntry {
   readonly issue: IssueRef;
   readonly target: DeliveryTarget;
@@ -42,14 +42,7 @@ export interface ConvenedEntry {
   readonly adoptPr: PrRef | null;
 }
 
-export interface Agenda {
-  readonly record: IssueRef;
-  readonly createdAt: Millis;
-  readonly parent: IssueRef | null;
-  readonly convened: readonly ConvenedEntry[];
-}
-
-// ---------------------------------------------------------------- GitHub facts
+// ---------------------------------------------------------------- GitHub facts (read each round, never stored)
 
 export interface LifecycleEvent {
   readonly id: EventId;
@@ -63,14 +56,7 @@ export interface IssueFact {
   /** Chronological close/reopen events. */
   readonly events: readonly LifecycleEvent[];
   readonly bodyHash: Hash;
-  /** Decision ids whose body replacement markers are present in the hidden block. */
-  readonly appliedDecisions: readonly RecordId[];
-  /** Row ids parsed from the issue's acceptance table (or the parent's closure table). */
-  readonly acceptanceRows: readonly string[];
   readonly children: readonly IssueRef[];
-  /** Set when the issue was created from a draft. */
-  readonly draftMarker: DraftId | null;
-  readonly isAgendaRecord: boolean;
 }
 
 export type PrState =
@@ -84,41 +70,44 @@ export type ChecksState = "pass" | "fail" | "pending" | "unknown";
 export interface ChecksFact {
   readonly state: ChecksState;
   readonly failedRunId: string | null;
-  readonly latestRunCreatedAt: Millis | null;
 }
 
-export interface PrFact {
+/** A PR as an issue's closing reference shows it: enough for outcomes and for carried design commits. */
+export interface PrLink {
   readonly ref: PrRef;
   readonly state: PrState;
+  readonly headBranch: string;
   readonly head: Sha;
   readonly target: DeliveryTarget;
-  readonly bodyHash: Hash;
-  /** The program-rendered body's applied marker: which PrSubmit it carries and the main-session design commits it credits. */
-  readonly applied: AppliedSubmit | null;
-  readonly mergeable: Mergeable;
-  readonly checks: ChecksFact;
-  /** Issues in the PR's closing references (kept after merge). */
+  /** Issues in the PR's closing references (kept after merge); empty when the base is not the default branch. */
   readonly closes: readonly IssueRef[];
-  readonly agendaMarker: boolean;
 }
 
-export interface AppliedSubmit {
-  readonly submit: RecordId;
-  readonly designCommits: readonly Sha[];
+/** A PR the agenda registered or adopted: its link plus what delivery reads (body, mergeability, checks). */
+export interface PrFact extends PrLink {
+  readonly bodyHash: Hash;
+  readonly mergeable: Mergeable;
+  readonly checks: ChecksFact;
 }
 
 export interface CommitFacts {
   readonly onDefault: readonly { readonly repo: RepoRef; readonly sha: Sha }[];
   /** `descendant` contains `ancestor`. */
   readonly contains: readonly { readonly repo: RepoRef; readonly ancestor: Sha; readonly descendant: Sha }[];
-  readonly defaultHead: readonly { readonly repo: RepoRef; readonly sha: Sha }[];
   /** Current head of every delivery target's base branch (start point of a new delivery branch); absent when the branch does not exist. */
   readonly baseHead: readonly { readonly repo: RepoRef; readonly base: string; readonly sha: Sha }[];
 }
 
-// ---------------------------------------------------------------- records (replies written as signed comments)
+export interface Facts {
+  readonly issues: readonly IssueFact[];
+  /** Every registered and adopted PR. */
+  readonly prs: readonly PrFact[];
+  /** The closing references of every issue read, as links. */
+  readonly links: readonly PrLink[];
+  readonly commits: CommitFacts;
+}
 
-export type Author = { readonly kind: "main" } | { readonly kind: "seat"; readonly agentId: AgentId; readonly requestName: string };
+// ---------------------------------------------------------------- reply payloads
 
 export type Anchor =
   | { readonly kind: "before"; readonly entry: IssueRef }
@@ -165,58 +154,22 @@ export type Claim =
   | { readonly kind: "split"; readonly member: IssueRef; readonly proposal: string }
   | { readonly kind: "blocked"; readonly member: IssueRef; readonly category: string; readonly attempts: string };
 
-export type GateStatus = "pass" | "fail" | "notRun";
-
-export interface Finding {
-  readonly id: string;
-  readonly location: string;
-  readonly consequence: string;
-  readonly reproduction: string;
-  readonly responsible: "owner" | "main";
-}
-
-export interface RowResult {
-  readonly rowId: string;
-  readonly command: string;
-  readonly output: string;
-  readonly pass: boolean;
-}
-
-export interface UnrelatedFailure {
-  readonly description: string;
-  readonly reproduction: string;
-}
-
 export interface Observed {
   readonly repo: RepoRef;
   readonly commit: Sha;
 }
 
-export type Verdict =
-  | {
-      readonly gate: "review";
-      readonly observedHead: Sha;
-      readonly gates: readonly [GateStatus, GateStatus, GateStatus, GateStatus, GateStatus];
-      readonly findings: readonly Finding[];
-    }
-  | {
-      readonly gate: "accept";
-      readonly observedHead: Sha;
-      readonly rows: readonly RowResult[];
-      readonly findings: readonly Finding[];
-      readonly unrelated: readonly UnrelatedFailure[];
-    }
-  | {
-      readonly gate: "postMerge";
-      readonly observed: readonly Observed[];
-      readonly rows: readonly RowResult[];
-      readonly unrelated: readonly UnrelatedFailure[];
-    }
-  | {
-      readonly gate: "closure";
-      readonly observed: readonly Observed[];
-      readonly rows: readonly RowResult[];
-    };
+export type GateKind = "review" | "accept" | "postMerge" | "closure";
+
+/**
+ * A gate seat's judgement: ok or not ok, and its words (the reason when not ok). Everything factual — the head, the
+ * acceptance rows, the observed commits — is the ticket's pin, stamped by the program (core.md §3 有效性).
+ */
+export interface Verdict {
+  readonly gate: GateKind;
+  readonly ok: boolean;
+  readonly note: string;
+}
 
 export type FindingVerdict =
   | { readonly kind: "upheld"; readonly responsible: "owner" | "main" }
@@ -229,7 +182,7 @@ export type FindingVerdict =
 export type Decision =
   | {
       readonly subject: "question";
-      readonly claim: RecordId;
+      readonly claim: ReplyId;
       readonly verdict:
         | { readonly kind: "answered" | "outOfDomain" | "implDefect" | "acceptanceMethod" }
         | { readonly kind: "designGap"; readonly route: Route };
@@ -237,60 +190,34 @@ export type Decision =
     }
   | {
       readonly subject: "noCodeClaim" | "splitClaim";
-      readonly claim: RecordId;
+      readonly claim: ReplyId;
       readonly member: IssueRef;
       readonly bodyHash: Hash;
       readonly verdict: "confirmed" | "refuted";
     }
-  | {
-      readonly subject: "blockedClaim";
-      readonly claim: RecordId;
-      readonly verdict: "replacePr" | "external" | "refuted";
-      /** Stamped by the program: the maintainable PR abandoned by `replacePr`. */
-      readonly abandon: PrRef | null;
-    }
-  | {
-      readonly subject: "findings";
-      readonly verdictRecord: RecordId;
-      readonly perFinding: readonly { readonly findingId: string; readonly verdict: FindingVerdict }[];
-    }
+  | { readonly subject: "blockedClaim"; readonly claim: ReplyId; readonly verdict: "replacePr" | "external" | "refuted" }
+  | { readonly subject: "findings"; readonly verdictId: ReplyId; readonly verdict: FindingVerdict }
   | { readonly subject: "closed"; readonly member: IssueRef; readonly event: EventId; readonly bodyHash: Hash; readonly verdict: "confirmedNoCode" | "reopen" }
   | { readonly subject: "reopened"; readonly member: IssueRef; readonly event: EventId; readonly verdict: "restore" | "correction" | "reopenAccepted" }
   | { readonly subject: "checks"; readonly pr: PrRef; readonly runId: string; readonly verdict: "rerun" | "fixNeeded" | "external" }
-  | { readonly subject: "postMergeFail" | "closureFail"; readonly verdictRecord: RecordId; readonly verdict: "correction" | "reverify" }
-  | { readonly subject: "unrelated"; readonly verdictRecord: RecordId }
+  | { readonly subject: "postMergeFail" | "closureFail"; readonly verdictId: ReplyId; readonly verdict: "correction" | "reverify" }
   | { readonly subject: "orphanDesign" | "migration" | "agendaGap" | "stall"; readonly key: Hash; readonly verdict: "resolved" | "external" }
   | { readonly subject: "effectFailed"; readonly effect: ObligationId; readonly failedAt: Millis; readonly verdict: "retry" | "external" }
-  | { readonly subject: "designFix"; readonly verdictRecord: RecordId; readonly commit: Sha }
+  | { readonly subject: "designFix"; readonly verdictId: ReplyId; readonly commit: Sha }
   | { readonly subject: "report"; readonly summary: string }
   | { readonly subject: "noCode"; readonly member: IssueRef; readonly bodyHash: Hash; readonly reason: string }
-  | { readonly subject: "seated"; readonly requestName: string; readonly previous: AgentId | null; readonly agentId: AgentId }
-  | { readonly subject: "woken"; readonly agentId: AgentId; readonly count: number };
+  | { readonly subject: "seated"; readonly requestName: string; readonly previous: AgentId | null; readonly agentId: AgentId };
 
-export interface DecisionRecordBody {
-  readonly kind: "decision";
-  readonly decision: Decision;
-  readonly rationale: string;
-  readonly drafts: readonly Draft[];
-  readonly bodyReplacements: readonly BodyReplacement[];
+export interface PrSubmit {
+  readonly branch: string;
+  readonly head: Sha;
+  readonly title: string;
+  readonly body: string;
+  readonly template: "fourLayer" | "docOnly";
+  readonly retryNote: string | null;
 }
 
-export type RecordBody =
-  | {
-      readonly kind: "prSubmit";
-      readonly member: IssueRef;
-      readonly branch: string;
-      readonly head: Sha;
-      readonly title: string;
-      readonly body: string;
-      readonly template: "fourLayer" | "docOnly";
-      readonly retryNote: string | null;
-    }
-  | { readonly kind: "claim"; readonly claim: Claim }
-  | { readonly kind: "verdict"; readonly obligation: ObligationId; readonly verdict: Verdict }
-  | DecisionRecordBody;
-
-/** Inputs a gate verdict observed; stamped by the program at admission (core.md §3 有效性). */
+/** Inputs a gate verdict observed; stamped by the program when the verdict is accepted (core.md §3 有效性). */
 export type Manifest =
   | {
       readonly gate: "review";
@@ -298,7 +225,7 @@ export type Manifest =
       readonly target: DeliveryTarget;
       readonly prBodyHash: Hash;
       readonly memberBodyHash: Hash;
-      readonly contractDecisions: readonly RecordId[];
+      readonly contractDecisions: readonly ReplyId[];
       readonly designCommits: readonly Sha[];
       readonly rejectedFindings: readonly string[];
     }
@@ -307,14 +234,14 @@ export type Manifest =
       readonly head: Sha;
       readonly target: DeliveryTarget;
       readonly memberBodyHash: Hash;
-      readonly contractDecisions: readonly RecordId[];
+      readonly contractDecisions: readonly ReplyId[];
       readonly designCommits: readonly Sha[];
     }
   | {
       readonly gate: "postMerge";
       readonly merges: readonly Observed[];
       readonly memberBodyHashes: readonly Hash[];
-      readonly contractDecisions: readonly RecordId[];
+      readonly contractDecisions: readonly ReplyId[];
       readonly designCommits: readonly Sha[];
     }
   | {
@@ -325,32 +252,130 @@ export type Manifest =
       readonly strandedDesign: readonly Sha[];
     };
 
-/** A signed record as read back from the store (only records whose stamp verified). */
-export interface StoredRecord {
-  readonly id: RecordId;
-  readonly at: Millis;
-  readonly author: Author;
-  /** The obligation this record answers, when it answers one. */
-  readonly obligation: ObligationId | null;
-  readonly idempotencyKey: string;
-  /** Gate inputs stamped at admission; present on verdicts only. */
-  readonly manifest: Manifest | null;
-  readonly payloadHash: Hash;
-  readonly body: RecordBody;
+// ---------------------------------------------------------------- agenda state (the local state file; core.md §1)
+
+export interface DraftState {
+  readonly id: DraftId;
+  readonly draft: Draft;
+  /** When the deciding reply was accepted; the store looks for an issue created after it before creating one. */
+  readonly proposedAt: Millis;
+  readonly issue: IssueRef | null;
 }
 
-// ---------------------------------------------------------------- snapshot and host observation
-
-export interface Snapshot {
-  readonly agenda: Agenda;
-  readonly issues: readonly IssueFact[];
-  readonly prs: readonly PrFact[];
-  readonly commits: CommitFacts;
-  /** Verified records in write order. */
-  readonly records: readonly StoredRecord[];
-  /** Program effects whose marker object (e.g. a notice comment) exists at the source. */
-  readonly effectMarkers: readonly ObligationId[];
+export interface SubmitState extends PrSubmit {
+  /** The deliver/fix ticket this submit completed. */
+  readonly answered: ObligationId;
+  /** The current PR carries this submit, crediting `appliedDesign`. */
+  readonly applied: boolean;
+  readonly appliedDesign: readonly Sha[];
 }
+
+export interface StoredVerdict {
+  readonly id: ReplyId;
+  readonly ticket: ObligationId;
+  readonly attempt: number;
+  readonly manifest: Manifest;
+  readonly verdict: Verdict;
+  /** The main session's ruling on this verdict when it is not ok. */
+  readonly adjudication: FindingVerdict | null;
+  /** postMerge / closure only. */
+  readonly failDecision: "correction" | "reverify" | null;
+}
+
+export interface GateSlot {
+  readonly attempt: number;
+  readonly verdict: StoredVerdict | null;
+}
+
+export interface PendingClaim {
+  readonly id: ReplyId;
+  readonly claim: Claim;
+}
+
+/** A contract-changing decision in force: designGap or acceptanceMethod (core.md §3). */
+export interface ContractDecision {
+  readonly id: ReplyId;
+  readonly affected: readonly IssueRef[];
+  readonly routes: readonly { readonly route: Route; readonly carrier: IssueRef | null }[];
+}
+
+export interface ReplacementState {
+  readonly decision: ReplyId;
+  readonly issue: IssueRef;
+  readonly baseHash: Hash;
+  readonly body: string;
+  readonly targetHash: Hash;
+  readonly applied: boolean;
+}
+
+export interface Repair {
+  readonly id: ReplyId;
+  readonly rationale: string;
+}
+
+export interface MemberState {
+  readonly issue: IssueRef;
+  readonly submit: SubmitState | null;
+  /** PRs the program created for this member, plus the PR adopted at convening. */
+  readonly prs: readonly PrRef[];
+  /** PRs given up by `replacePr`. */
+  readonly replaced: readonly PrRef[];
+  readonly review: GateSlot;
+  readonly accept: GateSlot;
+  /** Ids of not-ok review verdicts the main session adjudicated `rejected`. */
+  readonly rejectedFindings: readonly string[];
+  /** Open repair items from decisions, with the decision's rationale for the fix brief; cleared by the next `PrSubmit`. */
+  readonly implDefect: Repair | null;
+  readonly fixNeeded: Repair | null;
+  readonly designFixes: readonly { readonly verdictId: ReplyId; readonly commit: Sha }[];
+  readonly checks: { readonly runId: string; readonly verdict: "rerun" | "fixNeeded" | "external"; readonly rerunDone: boolean } | null;
+  /** The failing check run whose `fix` was completed most recently. */
+  readonly fixedRun: string | null;
+  readonly noCode: { readonly bodyHash: Hash; readonly at: Millis } | null;
+  readonly closed: { readonly event: EventId; readonly bodyHash: Hash; readonly verdict: "confirmedNoCode" | "reopen" } | null;
+  readonly reopened: { readonly event: EventId; readonly verdict: "restore" | "correction" | "reopenAccepted" } | null;
+  readonly external: boolean;
+}
+
+export interface UnitState {
+  readonly top: IssueRef;
+  readonly postMerge: GateSlot;
+}
+
+export interface SeatRecord {
+  readonly requestName: string;
+  readonly holder: AgentId | null;
+}
+
+export interface SubjectDecision {
+  readonly subject: "orphanDesign" | "migration" | "agendaGap" | "stall";
+  readonly key: Hash;
+  readonly verdict: "resolved" | "external";
+}
+
+export interface AgendaState {
+  /** Incremented on every write; the store compares it before replacing the file. */
+  readonly version: number;
+  readonly id: AgendaId;
+  readonly convenedAt: Millis;
+  readonly parent: IssueRef | null;
+  readonly convened: readonly ConvenedEntry[];
+  readonly drafts: readonly DraftState[];
+  readonly members: readonly MemberState[];
+  readonly units: readonly UnitState[];
+  readonly closure: GateSlot;
+  readonly claims: readonly PendingClaim[];
+  readonly contracts: readonly ContractDecision[];
+  readonly replacements: readonly ReplacementState[];
+  readonly subjects: readonly SubjectDecision[];
+  readonly effectDecisions: readonly { readonly effect: ObligationId; readonly failedAt: Millis; readonly verdict: "retry" | "external" }[];
+  readonly seats: readonly SeatRecord[];
+  /** The main session's most recent accepted decision: a resend of it after a lost response is answered `same`. */
+  readonly lastDecision: ReplyId | null;
+  readonly reported: boolean;
+}
+
+// ---------------------------------------------------------------- host observation
 
 export type RegistryStatus = "live" | "parked" | "aborted";
 
@@ -358,6 +383,8 @@ export interface RegisteredAgent {
   readonly id: AgentId;
   readonly requestName: string;
   readonly status: RegistryStatus;
+  /** Start of the current parked episode; null unless parked. */
+  readonly parkedSince: Millis | null;
 }
 
 export interface EffectFailure {
@@ -366,9 +393,12 @@ export interface EffectFailure {
   readonly error: string;
 }
 
+/** What realize takes from outside the agenda: policy text for briefs and the agent types seats are spawned as. */
 export interface Policy {
   readonly appendSystem: string;
   readonly systemBlocks: string;
+  /** Native `task` agent types: owner seats (default task:high) and gate seats (default task:mid). */
+  readonly seatAgents: { readonly owner: string; readonly gate: string };
 }
 
 export interface Host {

@@ -1,10 +1,11 @@
-// core.md §6.3 模型检查: bounded BFS over concrete worlds; AG invariants and EF(delivery complete).
+// core.md §6.4 模型检查: bounded BFS over concrete worlds; AG invariants and EF(delivery complete). Every accepted reply
+// and effect result is also checked against §6.3 (state changed, a resend is `same`, the answered ticket is gone).
 
 import { describe, expect, test } from "bun:test";
 import { canonical } from "../src/core/index.ts";
 import { canReach, explore, trace, type Exploration, type Node } from "./support/explore.ts";
 import { invariants } from "./support/invariants.ts";
-import { initialWorld, type AgendaSpec, type World } from "./support/world.ts";
+import { initialWorld, type AgendaSpec, type WorldMode } from "./support/world.ts";
 
 function report(name: string, x: Exploration): { unreachable: Node[]; stalls: Node[] } {
   const reach = canReach(x.nodes, (n) => n.derived?.done === true);
@@ -34,9 +35,20 @@ function report(name: string, x: Exploration): { unreachable: Node[]; stalls: No
 /** Edge labels (variant names, no ids) seen across all explorations, for the coverage assertion at the end. */
 const labelsSeen = new Set<string>();
 
-function check(name: string, spec: AgendaSpec, maxNodes: number): void {
-  const x = explore(initialWorld(spec), invariants, maxNodes);
+function check(name: string, spec: AgendaSpec, maxNodes: number, mode: WorldMode = "fresh"): void {
+  const x = explore(initialWorld(spec, mode), invariants, maxNodes);
   for (const n of x.nodes) for (const s of n.succ) labelsSeen.add(s.label);
+  if (mode === "adopted") {
+    const pushedRepair = x.nodes.find((n) => {
+      const m = n.derived?.classified.member;
+      if (m === undefined || m === null || !m.s.repairOwner || (m.s.review !== "stale" && m.s.accept !== "stale")) return false;
+      const ms = n.world.state.members.find((s) => s.issue.number === m.w.entry.issue.number);
+      return ms?.submit === null && m.w.entry.adoptPr !== null &&
+        n.derived?.obligations.some((o) => o.kind === "fix") === true &&
+        !n.derived.obligations.some((o) => o.kind === "review" || o.kind === "accept" || o.kind === "merge");
+    });
+    expect(pushedRepair).toBeDefined();
+  }
   const r = report(name, x);
   expect(x.truncated).toBe(false);
   expect(x.violations.map((v) => `${v.property}: ${v.detail}`)).toEqual([]);
@@ -45,7 +57,7 @@ function check(name: string, spec: AgendaSpec, maxNodes: number): void {
 }
 
 const zero = { perturb: 0, fail: 0, claim: 0, draft: 0 };
-// Budgets bound the explored graph (core.md §6.3 "bounded"). Each profile spends one kind of budget so every edge kind
+// Budgets bound the explored graph (core.md §6.4 "bounded"). Each profile spends one kind of budget so every edge kind
 // is explored from every reachable state of the protocol, while the state space stays finite and exhaustively expanded.
 const profiles: readonly { readonly name: string; readonly budget: AgendaSpec["budget"] }[] = [
   { name: "gate/check/effect failures", budget: { ...zero, fail: 1 } },
@@ -58,12 +70,15 @@ const correctionProfiles: readonly { readonly name: string; readonly budget: Age
   { name: "perturbations + corrections", budget: { ...zero, perturb: 1, draft: 1 } },
 ];
 
-describe("model checking (core.md §6.3)", () => {
+describe("model checking (core.md §6.4)", () => {
   for (const p of profiles) {
     test(`convened single-member agenda — ${p.name}`, () => {
       check(`single member, ${p.name}`, { members: [11], parent: null, outsideChild: false, budget: p.budget }, 100_000);
     }, 1_800_000);
   }
+  test("adopted single-member agenda — gate/check failures", () => {
+    check("adopted single member, gate/check failures", { members: [11], parent: null, outsideChild: false, budget: { ...zero, fail: 1 } }, 100_000, "adopted");
+  }, 1_800_000);
   for (const p of correctionProfiles) {
     test(`single-member agenda with a parent — ${p.name}`, () => {
       check(`single member + parent, ${p.name}`, { members: [11], parent: 5, outsideChild: false, budget: p.budget }, 100_000);
@@ -77,16 +92,16 @@ describe("model checking (core.md §6.3)", () => {
       check(`two units + parent, ${p.name}`, { members: [11, 12], parent: 5, outsideChild: false, budget: p.budget }, 100_000);
     }, 1_800_000);
   }
-  test("every edge kind of core.md §6.3 was explored", () => {
+  test("every edge kind of core.md §6.4 was explored", () => {
     const families = new Map<string, number>();
     for (const l of labelsSeen) families.set(l.split(":")[0] ?? l, (families.get(l.split(":")[0] ?? l) ?? 0) + 1);
     console.log(`[model] ${labelsSeen.size} distinct edge labels: ${[...labelsSeen].sort().join(" | ")}`);
     const required = [
       // replies: every reply variant the explored obligations admit
-      "deliver: prSubmit(new head)", "fix: prSubmit(new head)", "fix: prSubmit(same head)",
+      "deliver: prSubmit(new head)", "fix: owner push", "fix: prSubmit(same head)",
       "deliver: claim(question)", "deliver: claim(noCode)", "deliver: claim(split)", "deliver: claim(blocked)",
-      "review: pass", "review: fail", "review: claim(question)", "accept: pass", "accept: fail", "accept: pass+unrelated",
-      "postMerge: pass", "postMerge: fail", "postMerge: claim(question)", "closure: pass", "closure: fail", "closure: claim(question)",
+      "review: ok", "review: not ok", "review: claim(question)", "accept: ok", "accept: not ok",
+      "postMerge: ok", "postMerge: not ok", "postMerge: claim(question)", "closure: ok", "closure: not ok", "closure: claim(question)",
       "decideClaim: answered", "decideClaim: outOfDomain", "decideClaim: implDefect", "decideClaim: designGap(withPr)", "decideClaim: acceptanceMethod",
       "decideClaim: confirmed", "decideClaim: refuted", "decideClaim: confirmed(before)", "decideClaim: confirmed(after)",
       "decideClaim: replacePr", "decideClaim: external",
@@ -95,13 +110,14 @@ describe("model checking (core.md §6.3)", () => {
       "decideChecks: rerun", "decideChecks: fixNeeded", "decideChecks: external",
       "decideReopened: restore", "decideReopened: correction", "decideClosed: confirmedNoCode", "decideClosed: reopen",
       "decidePostMergeFail: reverify", "decidePostMergeFail: correction", "decideClosureFail: reverify", "decideClosureFail: correction",
-      "decide:unrelated: unrelated", "decide:agendaGap: resolved", "decide:agendaGap: external",
+      "decide:agendaGap: resolved", "decide:agendaGap: external",
       "decideEffectFailed: retry", "decideEffectFailed: external", "decideStall: external", "report: summary",
-      "spawn: seated", "wake: woken",
-      // program effects, including failures
-      "effect openPr", "effect updatePr", "effect applyBody", "effect createIssue", "effect noticeDecision", "effect rerunChecks",
-      "effect closeAgenda", "effect attachAgenda", "effect openPr fails", "effect openPr fails again after retry", "noticeForeignPr",
-      "merge (issue auto-closed)", "merge (no auto-close)", "program close", "program reopen", "program closeParent",
+      "spawn: seated",
+      // program effects, including failures and a result lost after the GitHub write
+      "effect openPr", "effect updatePr", "effect applyBody", "effect createIssue", "effect rerunChecks",
+      "effect openPr (result lost)", "effect applyBody (result lost)", "effect createIssue (result lost)",
+      "effect openPr fails", "effect openPr fails again after retry",
+      "merge (issue auto-closed)", "merge (no auto-close)", "program close", "program reopen", "program closeParent", "program wake", "program wake fails",
       // perturbations and fairness
       "perturb: push new head", "perturb: member body edited", "perturb: human close member", "perturb: human reopen member",
       "perturb: checks -> fail", "perturb: mergeable -> no", "perturb: seat parked", "perturb: seat aborted", "perturb: PR closed unmerged",

@@ -1,0 +1,101 @@
+// Host reads (C5): registry agents, caller identity, and the spawn premise, queried on demand and never stored; and the
+// one host write, waking a parked seat (the program `wake` action).
+// Host modules are imported through package paths only, so they resolve to the CLI runtime singletons.
+
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
+import { AgentRegistry, MAIN_AGENT_ID, type AgentStatus } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
+import { getRepoRoot } from "@oh-my-pi/pi-coding-agent/task/worktree";
+import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { stripSuffix, type AgentId, type Caller, type Millis, type RegisteredAgent, type RegistryStatus } from "../core/index.ts";
+
+function registryStatus(status: AgentStatus): RegistryStatus {
+  switch (status) {
+    case "running":
+    case "idle":
+      return "live";
+    case "parked":
+      return "parked";
+    case "aborted":
+      return "aborted";
+    default:
+      return assertNever(status);
+  }
+}
+
+/**
+ * `host.agents`: the subagents the main session spawned — seats are only ever spawned by main's native `task`
+ * (design「派出」). A seat's own helpers (depth 2) share the `rt-` prefix but are not seats.
+ */
+export function readAgents(): RegisteredAgent[] {
+  return AgentRegistry.global()
+    .list()
+    .filter((ref) => ref.kind === "sub" && ref.parentId === MAIN_AGENT_ID)
+    .map((ref) => ({
+      id: ref.id as AgentId,
+      requestName: stripSuffix(ref.id),
+      status: registryStatus(ref.status),
+      // One parked episode starts when the agent last left running (core `RegisteredAgent.parkedSince`).
+      parkedSince: ref.status === "parked" ? ((ref.lifecycle?.terminalAt ?? ref.lastActivity) as Millis) : null,
+    }));
+}
+
+/** Registry ids of subagents whose session is alive and not running a turn. */
+export function idleSubagents(): readonly string[] {
+  return AgentRegistry.global()
+    .list()
+    .filter((ref) => ref.kind === "sub" && ref.status === "idle" && ref.session !== null)
+    .map((ref) => ref.id);
+}
+
+/**
+ * The caller as `step` sees it. Identity comes only from the host: `ctx.agent`, and for a subagent the registry entry
+ * for `ctx.agent.id`, whose session must be the calling session (evidence: `session.sessionManager === ctx.sessionManager`).
+ */
+export function callerOf(ctx: ExtensionContext): Caller {
+  if (ctx.agent.kind === "main") return { kind: "main" };
+  const ref = AgentRegistry.global().get(ctx.agent.id);
+  return { kind: "sub", agentId: ctx.agent.id as AgentId, sessionMatches: ref?.session?.sessionManager === ctx.sessionManager };
+}
+
+/** What the woken seat reads first; its tickets arrive through the `context` injection of the revived turn. */
+const WAKE_BODY = "圆桌：你持有的票据还没有完成。按本轮注入的票据继续，完成后用 roundtable 端口回复。";
+
+/**
+ * Program `wake`: send the seat a message from main through the host's IRC bus, which revives a parked session
+ * (`AgentLifecycleManager.ensureLive`) and starts its turn. Completion is the registry fact (the seat is no longer
+ * parked in this episode); the receipt only reports whether delivery failed.
+ */
+export async function wakeSeat(agent: AgentId): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
+  const receipt = await IrcBus.global().send({ from: MAIN_AGENT_ID, to: agent, body: WAKE_BODY });
+  return receipt.outcome === "failed" ? { ok: false, error: `wake ${agent}: ${receipt.error ?? "delivery failed"}` } : { ok: true };
+}
+
+/**
+ * Spawn premise (design「派出的前提」): the main session's `task` must run asynchronously — host setting `async.enabled`
+ * — neither configured seat agent type may declare `blocking: true`, and `isolated: true` must be preparable, which
+ * the host allows only inside a repository (its own `getRepoRoot`). Returns the refusal reason.
+ */
+export async function spawnPremise(ctx: ExtensionContext, seatAgents: { readonly owner: string; readonly gate: string }): Promise<string | null> {
+  const session = AgentRegistry.global().get(ctx.agent.id)?.session ?? null;
+  if (session === null) return `无法读取主会话 ${ctx.agent.id} 的设置，不能确认异步 task 已开启。`;
+  if (!cfgAsyncEnabled.get(session))
+    return "召集被拒绝：需要开启异步 task（宿主设置 async.enabled 当前为 false）。否则主会话派出席位后会同步等待，子席位一提问就会死锁。请在配置里设 async.enabled: true 后重新召集。";
+  const { agents } = await discoverAgents(ctx.cwd);
+  for (const type of new Set([seatAgents.owner, seatAgents.gate])) {
+    const def = agents.find((a) => a.name === type);
+    if (def === undefined) return `召集被拒绝：找不到席位所需的 agent 类型 ${type}。`;
+    if (def.blocking === true) return `召集被拒绝：agent 类型 ${type} 声明了 blocking: true，派出时主会话会同步等待，席位提问时会死锁。`;
+  }
+  try {
+    await getRepoRoot(ctx.cwd);
+  } catch (err) {
+    return `召集被拒绝：席位以 isolated: true 派出，宿主要求主会话的工作目录在仓库里，而 ${ctx.cwd} 不在（${err instanceof Error ? err.message : String(err)}）。请在仓库目录里启动主会话后重新召集。`;
+  }
+  return null;
+}
+
+function assertNever(x: never): never {
+  throw new Error(`unreachable: ${JSON.stringify(x)}`);
+}

@@ -1,6 +1,6 @@
 // core.md §6.2 抽象层. Every consistent value of ReconcileSituation, VerificationSituation and ClosureSituation, and
 // for MemberSituation a systematic cover plus a fixed-seed random sample of consistent values, gets two structurally
-// different concrete Snapshots (γ1, γ2). Both must classify to exactly that value, and derive must realize exactly
+// different concrete inputs (γ1, γ2: agenda state and GitHub facts). Both must classify to exactly that value, and derive must realize exactly
 // the rules' obligations for it. A value is only left out when it breaks a named constraint (support/consistency.ts).
 
 import { describe, expect, test } from "bun:test";
@@ -67,7 +67,7 @@ function checkTarget<T>(t: T, layer: Layer<T>, tally: Tally): void {
       ok = false;
       continue;
     }
-    const d = derive(b.snap, b.host, policy);
+    const d = derive(b.state, b.facts, b.host, policy);
     const got = layer.situationOf(d.classified, v);
     if (canonical(got) !== canonical(t)) {
       tally.failures.push(`${v.name} classified ${canonical(got)}\n     wanted ${canonical(t)}`);
@@ -117,7 +117,7 @@ const realizedIn = (kinds: readonly string[], context: (v: Variant) => string) =
     .sort()
     .join(",");
 
-const MEMBER_KINDS = ["decideClaim", "deliver", "noticeForeignPr", "decideFindings", "fix", "designFix", "decideChecks", "review", "accept", "merge"];
+const MEMBER_KINDS = ["decideClaim", "deliver", "decideFindings", "fix", "designFix", "decideChecks", "review", "accept", "merge"];
 const RECONCILE_KINDS = ["close", "reopen", "decideReopened", "decideClosed"];
 const VERIFICATION_KINDS = ["decideClaim", "postMerge", "decidePostMergeFail"];
 const CLOSURE_KINDS = ["decideClaim", "closure", "decideClosureFail", "closeParent", "reopenParent", "report"];
@@ -149,8 +149,6 @@ describe("abstraction layer (core.md §6.2)", () => {
       designOnly: false,
       claim: "none",
       ours: "maintainable",
-      foreign: false,
-      foreignNoticed: false,
       materialized: "settled",
       review: "none",
       accept: "none",
@@ -219,7 +217,7 @@ describe("abstraction layer (core.md §6.2)", () => {
     for (const r of verificationRecipes()) {
       const b = verificationGamma(r, VARIANTS[0]);
       if (b.kind === "infeasible") continue;
-      const v = derive(b.snap, b.host, policy).classified.verification;
+      const v = derive(b.state, b.facts, b.host, policy).classified.verification;
       if (v !== null && !recipes.has(canonical(v.s))) recipes.set(canonical(v.s), r);
     }
     const tally: Tally = { checked: 0, constructed: 0, failures: [] };

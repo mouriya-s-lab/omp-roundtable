@@ -1,10 +1,11 @@
-// AG invariants for the model checker (core.md §6.3), checked on concrete facts where possible.
+// AG invariants for the model checker (core.md §6.4), checked on concrete facts and state where possible.
 
-import { canonical, memberGateGuard, verdictFails, type Derived } from "../../src/core/index.ts";
+import { canonical, memberGateGuard, obligationId, verdictFails, type Derived } from "../../src/core/index.ts";
+import { issueKey } from "../../src/core/identity.ts";
 import type { Invariant } from "./explore.ts";
 import { CLOSURE_CONSTRAINTS, MEMBER_CONSTRAINTS, RECONCILE_CONSTRAINTS, VERIFICATION_CONSTRAINTS, violations } from "./consistency.ts";
 import { MEMBER_STALLS } from "./stalls.ts";
-import type { IssueRef, Sha } from "../../src/core/index.ts";
+import type { IssueRef, Sha, StoredVerdict } from "../../src/core/index.ts";
 import type { World } from "./world.ts";
 
 export const invariants: readonly { readonly name: string; readonly check: Invariant }[] = [
@@ -15,6 +16,35 @@ export const invariants: readonly { readonly name: string; readonly check: Invar
       if (m === null || !memberGateGuard(m.s)) return null;
       const bad = d.obligations.filter((o) => o.kind === "review" || o.kind === "accept" || o.kind === "merge");
       return bad.length === 0 ? null : `guard ${canonical(m.s)} but ${bad.map((o) => o.kind).join(",")}`;
+    },
+  },
+  {
+    name: "repair: current owner adjudication keeps owner work guarded",
+    check: (n, d) => {
+      const m = d.classified.member;
+      if (m === null) return null;
+      const ms = n.world.state.members.find((x) => issueKey(x.issue) === issueKey(m.w.entry.issue)) ?? null;
+      const owner = currentUpheld(ms, "owner");
+      if (ms === null || m.s.ours !== "maintainable" || owner === null) return null;
+      if (!m.s.repairOwner) return `current owner adjudication ${owner.id} did not produce repairOwner`;
+      const bad = d.obligations.filter((o) => o.context === issueKey(m.w.entry.issue) && (o.kind === "review" || o.kind === "accept" || o.kind === "merge"));
+      return bad.length === 0 ? null : `owner repair ${owner.id} exposed ${bad.map((o) => o.kind).join(",")}`;
+    },
+  },
+  {
+    name: "repair: current main adjudication requires designFix and suppresses owner work",
+    check: (n, d) => {
+      const m = d.classified.member;
+      if (m === null) return null;
+      const ms = n.world.state.members.find((x) => issueKey(x.issue) === issueKey(m.w.entry.issue)) ?? null;
+      const main = currentUpheld(ms, "main");
+      if (ms === null || main === null) return null;
+      if (!m.s.repairMain) return `current main adjudication ${main.id} did not produce repairMain`;
+      const context = issueKey(m.w.entry.issue);
+      const ownerWork = d.obligations.filter((o) => o.context === context && (o.kind === "fix" || o.kind === "deliver"));
+      if (ownerWork.length > 0) return `main repair ${main.id} exposed ${ownerWork.map((o) => o.kind).join(",")}`;
+      const designFixId = obligationId("designFix", context, main.id, 1);
+      return d.obligations.some((o) => o.kind === "designFix" && o.context === context && o.id === designFixId) ? null : `main repair ${main.id} has no current designFix obligation`;
     },
   },
   {
@@ -42,62 +72,76 @@ export const invariants: readonly { readonly name: string; readonly check: Invar
     name: "no merge on stale or invalid gates",
     check: (n, d) => mergeViolation(n.world, d),
   },
+  {
+    // An agenda neither done nor waiting on the outside must have someone who acts: the main session, the program, or a
+    // live seat. A ticket held only by a parked seat nobody wakes is a silent stall (the acked-but-unexecuted wake).
+    name: "progress: an open agenda always has an actor",
+    check: (_n, d) => {
+      if (d.done || d.waiting) return null;
+      const live = new Set(d.classified.seats.filter((s) => s.state === "live").map((s) => s.w.requestName));
+      const acts = d.obligations.some((o) => o.holder === "main" || o.holder === "program" || (o.seat !== null && live.has(o.seat.requestName)));
+      return acts ? null : `no actor for ${d.obligations.map((o) => `${o.kind}/${o.holder}`).join(",")}`;
+    },
+  },
 ];
 
-/** Checked on concrete facts, independent of classify's gate evaluation. */
+/** Repair lifetime comes from the stored attempt and accepted completion, not the current gate manifest. */
+function currentUpheld(ms: World["state"]["members"][number] | null, role: "owner" | "main"): StoredVerdict | null {
+  if (ms === null) return null;
+  for (const slot of [ms.review, ms.accept]) {
+    const verdict = slot.verdict;
+    if (verdict !== null && verdict.attempt === slot.attempt && verdict.adjudication?.kind === "upheld" &&
+        verdict.adjudication.responsible === role &&
+        (role === "owner" || !ms.designFixes.some((x) => x.verdictId === verdict.id))) return verdict;
+  }
+  return null;
+}
+
+/** Checked on concrete facts and the state's gate slots, independent of classify's gate evaluation. */
 function mergeViolation(w: World, d: Derived): string | null {
   const merge = d.obligations.find((o) => o.kind === "merge");
   if (merge === undefined || merge.action === null || merge.action.kind !== "merge") return null;
   const m = d.classified.member;
   if (m === null || m.w.pr === null) return "merge without an active member PR";
-  const pr = w.snap.prs.find((p) => p.ref.number === m.w.pr?.ref.number);
+  const pr = w.facts.prs.find((p) => p.ref.number === m.w.pr?.ref.number);
   if (pr === undefined || pr.state.kind !== "open") return "merge of a PR that is not open";
   if (merge.action.head !== pr.head) return `merge head ${merge.action.head} != PR head ${pr.head}`;
   if (pr.mergeable !== "yes" || pr.checks.state !== "pass") return `merge with mergeable=${pr.mergeable} checks=${pr.checks.state}`;
+  const ms = w.state.members.find((x) => x.issue.number === m.w.entry.issue.number);
   const passFor = (gate: "review" | "accept"): boolean => {
     const want = gate === "review" ? m.w.reviewManifest : m.w.acceptManifest;
-    return w.snap.records.some(
-      (r) => r.body.kind === "verdict" && r.body.verdict.gate === gate && !verdictFails(r.body.verdict) && r.manifest !== null && canonical(r.manifest) === canonical(want) && "head" in r.manifest && r.manifest.head === pr.head,
-    );
+    const slot = ms === undefined ? null : gate === "review" ? ms.review : ms.accept;
+    const v = slot?.verdict ?? null;
+    return v !== null && slot !== null && v.attempt === slot.attempt && !verdictFails(v.verdict) && canonical(v.manifest) === canonical(want) && "head" in v.manifest && v.manifest.head === pr.head;
   };
   if (!passFor("review")) return "merge without a passing review verdict on the current pin";
   if (!passFor("accept")) return "merge without a passing accept verdict on the current pin";
-  const undecidedClaim = w.snap.records.some(
-    (r) => r.body.kind === "claim" && !w.snap.records.some((x) => x.body.kind === "decision" && "claim" in x.body.decision && x.body.decision.claim === r.id),
-  );
-  if (undecidedClaim) return "merge while a claim is undecided";
+  if (w.state.claims.length > 0) return "merge while a claim is undecided";
   const missing = missingDesignCommits(w, m.w.entry.issue, pr.head);
   return missing.length === 0 ? null : `merge of head ${pr.head} missing design commits ${missing.join(",")}`;
 }
 
-
 /**
- * Design commits decided for `member` (designFix, designGap withPr) that are neither on the default branch nor in `head`.
- * Computed from records, independently of classify; also part of the explorer's state key so that worlds differing
- * only in this hidden fact are not merged.
+ * Design commits decided for `member` (designFix, designGap withPr carried by it) that are neither on the default branch
+ * nor in `head`. Computed from the state, independently of classify; also part of the explorer's state key so that
+ * worlds differing only in this hidden fact are not merged.
  */
 export function missingDesignCommits(w: World, member: IssueRef, head: Sha): string[] {
-  // every design commit decided for this member (designFix, designGap withPr) and not on the default branch is in the merged head
   const contained = new Set<string>([head]);
   let grew = true;
   while (grew) {
     grew = false;
-    for (const c of w.snap.commits.contains) if (contained.has(c.descendant) && !contained.has(c.ancestor)) {
-      contained.add(c.ancestor);
-      grew = true;
-    }
+    for (const c of w.facts.commits.contains)
+      if (contained.has(c.descendant) && !contained.has(c.ancestor)) {
+        contained.add(c.ancestor);
+        grew = true;
+      }
   }
-  const ctx = `${member.repo.owner}/${member.repo.name}#${member.number}|`;
-  const memberVerdicts = new Set(w.snap.records.filter((r) => r.body.kind === "verdict" && r.idempotencyKey.startsWith(ctx)).map((r) => r.id));
-  const required: string[] = [];
-  for (const r of w.snap.records) {
-    if (r.body.kind !== "decision") continue;
-    const dec = r.body.decision;
-    if (dec.subject === "designFix" && memberVerdicts.has(dec.verdictRecord)) required.push(dec.commit);
-    if (dec.subject === "question" && dec.verdict.kind === "designGap" && dec.verdict.route.kind === "withPr" && dec.affected.some((a) => a.number === member.number)) required.push(dec.verdict.route.commit);
-    if (dec.subject === "findings" && memberVerdicts.has(dec.verdictRecord))
-      for (const f of dec.perFinding) if (f.verdict.kind === "designGap" && f.verdict.route.kind === "withPr") required.push(f.verdict.route.commit);
-  }
-  const onDefault = new Set<string>(w.snap.commits.onDefault.map((c) => c.sha));
+  const same = (a: IssueRef | null): boolean => a !== null && a.number === member.number && a.repo.owner === member.repo.owner && a.repo.name === member.repo.name;
+  const required: string[] = [
+    ...(w.state.members.find((m) => same(m.issue))?.designFixes.map((d) => d.commit) ?? []),
+    ...w.state.contracts.flatMap((c) => c.routes.filter((r) => r.route.kind === "withPr" && same(r.carrier)).map((r) => r.route.commit)),
+  ];
+  const onDefault = new Set<string>(w.facts.commits.onDefault.map((c) => c.sha));
   return required.filter((s) => !onDefault.has(s) && !contained.has(s));
 }
