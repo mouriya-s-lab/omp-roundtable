@@ -70,6 +70,8 @@ const correctionProfiles: readonly { readonly name: string; readonly budget: Age
   { name: "perturbations + corrections", budget: { ...zero, perturb: 1, draft: 1 } },
 ];
 
+const combinedBudget: AgendaSpec["budget"] = { perturb: 1, fail: 1, claim: 0, draft: 0 };
+
 describe("model checking (core.md §6.4)", () => {
   for (const p of profiles) {
     test(`convened single-member agenda — ${p.name}`, () => {
@@ -78,6 +80,9 @@ describe("model checking (core.md §6.4)", () => {
   }
   test("adopted single-member agenda — gate/check failures", () => {
     check("adopted single member, gate/check failures", { members: [11], parent: null, outsideChild: false, budget: { ...zero, fail: 1 } }, 100_000, "adopted");
+  }, 1_800_000);
+  test("convened single-member agenda — perturbation + failure", () => {
+    check("single member, perturbation + failure", { members: [11], parent: null, outsideChild: false, budget: combinedBudget }, 100_000);
   }, 1_800_000);
   for (const p of correctionProfiles) {
     test(`single-member agenda with a parent — ${p.name}`, () => {
@@ -110,7 +115,9 @@ describe("model checking (core.md §6.4)", () => {
       "decideChecks: rerun", "decideChecks: fixNeeded", "decideChecks: external",
       "decideReopened: restore", "decideReopened: correction", "decideClosed: confirmedNoCode", "decideClosed: reopen",
       "decidePostMergeFail: reverify", "decidePostMergeFail: correction", "decideClosureFail: reverify", "decideClosureFail: correction",
-      "decide:agendaGap: resolved", "decide:agendaGap: external",
+      // `resolved` requires a real draft; the no-budget agenda-gap path is covered by external + its fairness lift.
+      "decide:agendaGap: external", "lift external agenda gap", "lift external orphan design",
+      "lift external body conflict: base", "lift external body conflict: target",
       "decideEffectFailed: retry", "decideEffectFailed: external", "decideStall: external", "report: summary",
       "spawn: seated",
       // program effects, including failures and a result lost after the GitHub write

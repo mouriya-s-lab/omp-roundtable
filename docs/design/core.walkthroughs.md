@@ -111,15 +111,15 @@ review 或 accept 的不通过结论被裁定为 `rejected` 或 `outOfScope` 时
 
 ## W17 设计 commit 失去承载者
 
-d 不在默认分支上，也没有任何可维护的 PR 包含它，承载者已不能承载 → Main `decide(orphanDesign)` → 裁定附设计承接项的草稿。该条目 `designOnly = true`，规则直接把 owner 类义务交给主会话。
+d 不在默认分支上，也没有任何可维护的 PR 包含它，承载者已不能承载 → Main `decide(orphanDesign)`。不带草稿的 `resolved` 被拒绝，原票据保留；附补项草稿则受理并派生 `createIssue`，草稿受理本身不证明 d 已落地。裁定 `external` 时等待操作员把 d 落入默认分支，下一轮按源头事实解除主题等待，不再追加停滞票据。
 
 ## W18 `defaultFirst` 的迁移失去承担者
 
-迁移来源尚未满足，承担迁移的成员已关闭 → Main `decide(migration)` → 迁移草稿插在当前单元之后，成为下一项。
+迁移来源尚未满足，承担迁移的成员已关闭 → Main `decide(migration)`。`resolved` 必须附补项草稿，否则拒绝；`external` 进入当前主题的等待。操作员重开原迁移 issue，或原 issue 已在议程内且由 PR 交付后，触发主题的事实消失，等待解除；仅创建另一份草稿不等于原迁移完成。
 
 ## W19 树关闭
 
-1. parent 的某个子 issue 不在议程里，也没有已核实的终点事实 → Main `decide(agendaGap)`。
+1. parent 的某个子 issue 不在议程里，也没有已核实的终点事实 → Main `decide(agendaGap)`。`resolved` 必须附补项草稿，否则拒绝；`external` 等待原子 issue 获得已核实终点。创建另一个 issue 不会使原子 issue 自动进入议程或成为终点。
 2. 全部单元到达终点，没有滞留的设计义务 → Gate `closure`。
 3. 通过 → Program `closeParent`；失败 → Main `decide(closureFail)`。
 4. parent 在没有有效通过的情况下被关闭 → Program `reopen(parent)`，之后照常执行 `closure`。
@@ -150,6 +150,8 @@ d 不在默认分支上，也没有任何可维护的 PR 包含它，承载者�
 - `external`：该效应在裁定有效期间不再执行，进入等待集合，并报告操作员。
 
 如果这个效应属于 `materialized` 的范围，在它完成之前，gate 与合并一直被抑制。
+
+正文替换的基准与当前正文冲突时，不执行写入 → Main `decide(stall)`。`external` 等待操作员在 GitHub 恢复基准或设为目标；恢复基准后原替换继续执行，设为目标后 store 只核对源头并写回 `bodyApplied`。只改变 GitHub 事实，不删除裁定；如果同一效应还被独立的执行失败 `external` 阻塞，这次正文变化不会解除它。
 
 ## W24 收尾报告
 

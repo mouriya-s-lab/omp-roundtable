@@ -50,7 +50,7 @@
 | `Claim(question)` | 最小复现（`path: bytes`）、两种读法及各自的权威出处、最早缺信息的环节、建议 | — |
 | `Claim(noCode \| split \| blocked)` | 证据；拆分提案；阻塞类别与已尝试的途径 | — |
 | `Verdict` | `ok`（通过或不通过）；`note`：理由，不通过时写清问题、位置与复现方式。gate 席位只回复这两项；accept、postMerge 与 closure 的 `ok` 表示每一条验收行都通过 | 无；gate 取自票据种类，head、合并提交等事实是票据的 pin |
-| `Decision` | subject、verdict，以及该变体要求的字段（见下表） | verdict 属于该 subject；设计路线满足适用条件；正文替换的基准哈希等于当前哈希 |
+| `Decision` | subject、verdict，以及该变体要求的字段（见下表） | verdict 属于该 subject；设计路线满足适用条件；正文替换的基准哈希等于当前哈希；`orphanDesign`、`migration`、`agendaGap` 的 `resolved` 附至少一份草稿 |
 
 所有回复里的输入清单都由程序按 pin 盖入，席位不填写。
 
@@ -66,8 +66,9 @@
 | `reopened` | `restore`、`correction`（附草稿）、`reopenAccepted` |
 | `checks` | `rerun`、`fixNeeded`、`external` |
 | `postMergeFail`、`closureFail` | `correction` 或补项（附草稿）、`reverify` |
-| `orphanDesign`、`migration`、`agendaGap`、`effectFailed` | 附草稿或插入、`retry`、`external` |
-| `stall` | `external(detail)`，或补充事实的草稿与插入 |
+| `orphanDesign`、`migration`、`agendaGap` | `resolved`（必须附补项草稿，受理不证明源头事实已满足）、`external`（当前主题进入等待，报告操作员及对应源头解除条件） |
+| `effectFailed` | `retry`、`external` |
+| `stall` | `external`（正文冲突由操作员恢复基准或设为目标解除），或附补充事实；正文冲突的 `resolved` 附以当前正文为基准的新替换 |
 | `designFix` | 设计 commit |
 | `report` | 汇总 |
 | `seated` | 实际 agentId：该 agent 是待回执的 agent（持有者不可用时，registry 顺序里第一个在 registry 中、不是 aborted、去掉后缀后等于请求名、不是持有者的 agent） |
