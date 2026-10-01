@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { canonical } from "../src/core/index.ts";
 import { canReach, explore, trace, type Exploration, type Node } from "./support/explore.ts";
 import { invariants } from "./support/invariants.ts";
-import { initialWorld, type AgendaSpec, type World } from "./support/world.ts";
+import { initialWorld, type AgendaSpec, type WorldMode } from "./support/world.ts";
 
 function report(name: string, x: Exploration): { unreachable: Node[]; stalls: Node[] } {
   const reach = canReach(x.nodes, (n) => n.derived?.done === true);
@@ -35,9 +35,20 @@ function report(name: string, x: Exploration): { unreachable: Node[]; stalls: No
 /** Edge labels (variant names, no ids) seen across all explorations, for the coverage assertion at the end. */
 const labelsSeen = new Set<string>();
 
-function check(name: string, spec: AgendaSpec, maxNodes: number): void {
-  const x = explore(initialWorld(spec), invariants, maxNodes);
+function check(name: string, spec: AgendaSpec, maxNodes: number, mode: WorldMode = "fresh"): void {
+  const x = explore(initialWorld(spec, mode), invariants, maxNodes);
   for (const n of x.nodes) for (const s of n.succ) labelsSeen.add(s.label);
+  if (mode === "adopted") {
+    const pushedRepair = x.nodes.find((n) => {
+      const m = n.derived?.classified.member;
+      if (m === undefined || m === null || !m.s.repairOwner || (m.s.review !== "stale" && m.s.accept !== "stale")) return false;
+      const ms = n.world.state.members.find((s) => s.issue.number === m.w.entry.issue.number);
+      return ms?.submit === null && m.w.entry.adoptPr !== null &&
+        n.derived?.obligations.some((o) => o.kind === "fix") === true &&
+        !n.derived.obligations.some((o) => o.kind === "review" || o.kind === "accept" || o.kind === "merge");
+    });
+    expect(pushedRepair).toBeDefined();
+  }
   const r = report(name, x);
   expect(x.truncated).toBe(false);
   expect(x.violations.map((v) => `${v.property}: ${v.detail}`)).toEqual([]);
@@ -65,6 +76,9 @@ describe("model checking (core.md §6.4)", () => {
       check(`single member, ${p.name}`, { members: [11], parent: null, outsideChild: false, budget: p.budget }, 100_000);
     }, 1_800_000);
   }
+  test("adopted single-member agenda — gate/check failures", () => {
+    check("adopted single member, gate/check failures", { members: [11], parent: null, outsideChild: false, budget: { ...zero, fail: 1 } }, 100_000, "adopted");
+  }, 1_800_000);
   for (const p of correctionProfiles) {
     test(`single-member agenda with a parent — ${p.name}`, () => {
       check(`single member + parent, ${p.name}`, { members: [11], parent: 5, outsideChild: false, budget: p.budget }, 100_000);
@@ -84,7 +98,7 @@ describe("model checking (core.md §6.4)", () => {
     console.log(`[model] ${labelsSeen.size} distinct edge labels: ${[...labelsSeen].sort().join(" | ")}`);
     const required = [
       // replies: every reply variant the explored obligations admit
-      "deliver: prSubmit(new head)", "fix: prSubmit(new head)", "fix: prSubmit(same head)",
+      "deliver: prSubmit(new head)", "fix: owner push", "fix: prSubmit(same head)",
       "deliver: claim(question)", "deliver: claim(noCode)", "deliver: claim(split)", "deliver: claim(blocked)",
       "review: ok", "review: not ok", "review: claim(question)", "accept: ok", "accept: not ok",
       "postMerge: ok", "postMerge: not ok", "postMerge: claim(question)", "closure: ok", "closure: not ok", "closure: claim(question)",

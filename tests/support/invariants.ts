@@ -1,10 +1,11 @@
 // AG invariants for the model checker (core.md §6.4), checked on concrete facts and state where possible.
 
-import { canonical, memberGateGuard, verdictFails, type Derived } from "../../src/core/index.ts";
+import { canonical, memberGateGuard, obligationId, verdictFails, type Derived } from "../../src/core/index.ts";
+import { issueKey } from "../../src/core/identity.ts";
 import type { Invariant } from "./explore.ts";
 import { CLOSURE_CONSTRAINTS, MEMBER_CONSTRAINTS, RECONCILE_CONSTRAINTS, VERIFICATION_CONSTRAINTS, violations } from "./consistency.ts";
 import { MEMBER_STALLS } from "./stalls.ts";
-import type { IssueRef, Sha } from "../../src/core/index.ts";
+import type { IssueRef, Sha, StoredVerdict } from "../../src/core/index.ts";
 import type { World } from "./world.ts";
 
 export const invariants: readonly { readonly name: string; readonly check: Invariant }[] = [
@@ -15,6 +16,35 @@ export const invariants: readonly { readonly name: string; readonly check: Invar
       if (m === null || !memberGateGuard(m.s)) return null;
       const bad = d.obligations.filter((o) => o.kind === "review" || o.kind === "accept" || o.kind === "merge");
       return bad.length === 0 ? null : `guard ${canonical(m.s)} but ${bad.map((o) => o.kind).join(",")}`;
+    },
+  },
+  {
+    name: "repair: current owner adjudication keeps owner work guarded",
+    check: (n, d) => {
+      const m = d.classified.member;
+      if (m === null) return null;
+      const ms = n.world.state.members.find((x) => issueKey(x.issue) === issueKey(m.w.entry.issue)) ?? null;
+      const owner = currentUpheld(ms, "owner");
+      if (ms === null || m.s.ours !== "maintainable" || owner === null) return null;
+      if (!m.s.repairOwner) return `current owner adjudication ${owner.id} did not produce repairOwner`;
+      const bad = d.obligations.filter((o) => o.context === issueKey(m.w.entry.issue) && (o.kind === "review" || o.kind === "accept" || o.kind === "merge"));
+      return bad.length === 0 ? null : `owner repair ${owner.id} exposed ${bad.map((o) => o.kind).join(",")}`;
+    },
+  },
+  {
+    name: "repair: current main adjudication requires designFix and suppresses owner work",
+    check: (n, d) => {
+      const m = d.classified.member;
+      if (m === null) return null;
+      const ms = n.world.state.members.find((x) => issueKey(x.issue) === issueKey(m.w.entry.issue)) ?? null;
+      const main = currentUpheld(ms, "main");
+      if (ms === null || main === null) return null;
+      if (!m.s.repairMain) return `current main adjudication ${main.id} did not produce repairMain`;
+      const context = issueKey(m.w.entry.issue);
+      const ownerWork = d.obligations.filter((o) => o.context === context && (o.kind === "fix" || o.kind === "deliver"));
+      if (ownerWork.length > 0) return `main repair ${main.id} exposed ${ownerWork.map((o) => o.kind).join(",")}`;
+      const designFixId = obligationId("designFix", context, main.id, 1);
+      return d.obligations.some((o) => o.kind === "designFix" && o.context === context && o.id === designFixId) ? null : `main repair ${main.id} has no current designFix obligation`;
     },
   },
   {
@@ -54,6 +84,18 @@ export const invariants: readonly { readonly name: string; readonly check: Invar
     },
   },
 ];
+
+/** Repair lifetime comes from the stored attempt and accepted completion, not the current gate manifest. */
+function currentUpheld(ms: World["state"]["members"][number] | null, role: "owner" | "main"): StoredVerdict | null {
+  if (ms === null) return null;
+  for (const slot of [ms.review, ms.accept]) {
+    const verdict = slot.verdict;
+    if (verdict !== null && verdict.attempt === slot.attempt && verdict.adjudication?.kind === "upheld" &&
+        verdict.adjudication.responsible === role &&
+        (role === "owner" || !ms.designFixes.some((x) => x.verdictId === verdict.id))) return verdict;
+  }
+  return null;
+}
 
 /** Checked on concrete facts and the state's gate slots, independent of classify's gate evaluation. */
 function mergeViolation(w: World, d: Derived): string | null {

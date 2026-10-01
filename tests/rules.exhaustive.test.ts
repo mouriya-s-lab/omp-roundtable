@@ -112,7 +112,9 @@ function memberCheck(s: MemberSituation, out: readonly Spec<MemberKind>[]): "ok"
     const ok = s.review === "validPass" && s.accept === "validPass" && s.mergeable === "yes" && s.checks === "pass" && !guard && s.ours === "maintainable";
     if (!ok) return "merge without its preconditions";
   }
-  if (s.ours === "none" && out.some((o) => o.kind !== "deliver" && o.kind !== "decideClaim")) return "PR obligation without a maintainable PR";
+  if (s.ours === "none" && out.some((o) => o.kind !== "deliver" && o.kind !== "decideClaim" && o.kind !== "designFix")) return "PR obligation without a maintainable PR";
+  if (has(out, "designFix") !== s.repairMain) return "designFix differs from Main repair";
+  if (s.repairMain && (has(out, "fix") || has(out, "deliver"))) return "Main repair still assigns fix/deliver";
   if ((has(out, "review") && !gateNeeded(s.review)) || (has(out, "accept") && !gateNeeded(s.accept))) return "gate re-issued over a valid verdict";
   if (s.claim !== "none" && !has(out, "decideClaim")) return "pending claim without decide(claim)";
   for (const o of out) {

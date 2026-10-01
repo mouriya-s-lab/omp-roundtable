@@ -29,6 +29,7 @@ import type {
   ObligationId,
   Policy,
   PrFact,
+  PrRef,
   Reply,
   RepoRef,
   Sha,
@@ -94,22 +95,50 @@ export interface AgendaSpec {
   readonly budget: Budget;
 }
 
-export function initialWorld(spec: AgendaSpec): World {
+export type WorldMode = "fresh" | "adopted";
+
+export function initialWorld(spec: AgendaSpec, mode: WorldMode = "fresh"): World {
   const members = spec.members.map((n) => issue(n));
   const outside = spec.outsideChild ? [issue(90)] : [];
   const parent =
     spec.parent === null ? [] : [issue(spec.parent, { children: [...spec.members.map(issueRef), ...outside.map((i) => i.ref)] }), ...outside];
+  const adopted = mode === "adopted" ? spec.members.map((n, i) => {
+    const ref: PrRef = { repo, number: 100 + i };
+    const head = sha(`adopt-${n}-${i}`);
+    return {
+      ref,
+      state: { kind: "open" as const },
+      headBranch: "feat",
+      head,
+      target: { repo, base: "main" },
+      bodyHash: hash(`adopted-pr-body-${n}`),
+      mergeable: "yes" as const,
+      checks: { state: "pass" as const, failedRunId: null },
+      closes: [issueRef(n)],
+    } satisfies PrFact;
+  }) : [];
+  const adoptedPr = (n: number): PrRef | null => adopted.find((p) => p.closes.some((ref) => ref.number === n))?.ref ?? null;
   const state = convene(
     "agenda-1" as AgendaId,
     ms(1000),
     spec.parent === null ? null : issueRef(spec.parent),
-    spec.members.map((n) => ({ issue: issueRef(n), target: { repo, base: "main" }, designOnly: false, adoptPr: null })),
+    spec.members.map((n) => ({ issue: issueRef(n), target: { repo, base: "main" }, designOnly: false, adoptPr: adoptedPr(n) })),
   );
+  const base = sha("base0");
   return {
     state,
-    facts: { issues: [...members, ...parent], prs: [], links: [], commits: { onDefault: [{ repo, sha: sha("base0") }], contains: [], baseHead: [] } },
+    facts: {
+      issues: [...members, ...parent],
+      prs: adopted,
+      links: [],
+      commits: {
+        onDefault: [{ repo, sha: base }],
+        contains: adopted.map((p) => ({ repo, ancestor: base, descendant: p.head })),
+        baseHead: mode === "adopted" ? [{ repo, base: "main", sha: base }] : [],
+      },
+    },
     host: { agents: [], failures: [] },
-    defaultHead: sha("base0"),
+    defaultHead: base,
     clock: 2000,
     seq: 0,
     budget: spec.budget,
@@ -177,7 +206,11 @@ export interface Rejection {
   readonly obligation: string;
 }
 
-type Stepped = { readonly kind: "ok"; readonly world: World } | { readonly kind: "same" } | { readonly kind: "rejected"; readonly reason: string };
+type Stepped =
+  | { readonly kind: "ok"; readonly world: World }
+  | { readonly kind: "same" }
+  | { readonly kind: "rejected"; readonly reason: string }
+  | { readonly kind: "world"; readonly world: World };
 
 const NO_LIVE: LiveFacts = { branchHead: null, branchContains: [] };
 
@@ -233,6 +266,10 @@ export function expand(w: World): Expansion {
   };
   const via = (label: string, ob: Obligation, a: Stepped | null): void => {
     if (a === null || a.kind === "same") return;
+    if (a.kind === "world") {
+      push(label, a.world);
+      return;
+    }
     if (a.kind === "ok") push(label, a.world);
     else rejections.push({ label, reason: a.reason, obligation: ob.kind });
   };
@@ -565,6 +602,14 @@ function claimEdge(w: World, ob: Obligation, caller: Caller, claim: Claim): Step
   return spent === null ? null : reply(spent, caller, { kind: "claim", obligation: ob.id, claim });
 }
 
+function ownerPush(w: World, member: Classified["member"]): World | null {
+  if (member === null || member.w.pr === null) return null;
+  const t = tick(w);
+  const head = sha(`h${t.seq}`);
+  const pushed = addCommit(t, head, [t.defaultHead, member.w.pr.head, ...member.w.designCommits]);
+  return updatePr(pushed, member.w.pr.ref.number, (p) => ({ ...p, head, mergeable: "unknown", checks: { state: "pending", failedRunId: null } }));
+}
+
 function ownerEdges(w: World, c: Classified, ob: Obligation, caller: Caller): [string, Stepped | null][] {
   const m = c.member;
   if (m === null) return [];
@@ -593,7 +638,13 @@ function ownerEdges(w: World, c: Classified, ob: Obligation, caller: Caller): [s
       reply(t, caller, { kind: "prSubmit", obligation: ticket.id, branch: "feat", head, title: "t", body: `b${t.seq}`, template: "fourLayer", retryNote: null }, { branchHead: head, branchContains: required.filter((d) => contained.includes(d)) }),
     ]);
   };
-  submit("new head", true);
+  // The source push is its own successor; it must not disappear merely because the later reply loses its ticket.
+  if (ob.kind === "fix" && caller.kind === "sub") {
+    const pushed = ownerPush(w, m);
+    if (pushed !== null) out.push([`${ob.kind}: owner push`, { kind: "world", world: pushed }]);
+  } else {
+    submit("new head", true);
+  }
   submit("same head", false);
   out.push([`${ob.kind}: claim(question)`, claimEdge(w, ob, caller, { kind: "question", context: { kind: "member", member }, reproduction: "p", readings: ["a", "b"], earliestGap: "g", proposal: "x" })]);
   out.push([`${ob.kind}: claim(noCode)`, claimEdge(w, ob, caller, { kind: "noCode", member, evidence: "e" })]);

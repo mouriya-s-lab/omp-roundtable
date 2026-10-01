@@ -14,6 +14,7 @@ export interface Constraint<T> {
 }
 
 const vfa = (s: MemberSituation): boolean => s.review === "validFailAdjudicated" || s.accept === "validFailAdjudicated";
+const stale = (s: MemberSituation): boolean => s.review === "stale" || s.accept === "stale";
 
 export const MEMBER_CONSTRAINTS: readonly Constraint<MemberSituation>[] = [
   {
@@ -25,7 +26,12 @@ export const MEMBER_CONSTRAINTS: readonly Constraint<MemberSituation>[] = [
   { name: "ours=none ∧ deliverDone ⇒ materialized=pending", violated: (s) => s.ours === "none" && s.deliverDone && s.materialized === "settled" },
   { name: "checksRunFixed or a checks decision ⇒ checks=fail", violated: (s) => s.checks !== "fail" && (s.checksRunFixed || s.checksDecided !== "none") },
   { name: "checksDecided=external ⇒ externalBlock", violated: (s) => s.checksDecided === "external" && !s.externalBlock },
-  { name: "repairMain ⇒ an adjudicated failing gate verdict", violated: (s) => s.repairMain && !vfa(s) },
+  {
+    // A maintained PR exposes an upheld Main repair as a current failing verdict or as stale evidence after a push.
+    // With no PR, gate states are necessarily none; the stored current-attempt verdict is historical and hidden.
+    name: "repairMain ⇒ maintainable VFA or stale, or hidden historical",
+    violated: (s) => s.repairMain && s.ours !== "none" && (!vfa(s) && !stale(s)),
+  },
   {
     // upheld findings repair; designGap/acceptanceMethod change the contract (verdict stale); all-dismissed or answered ⇒ superseded
     name: "an adjudicated failing verdict that is still valid carries a repair",
