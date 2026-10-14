@@ -1,6 +1,6 @@
 {
   "name": "omp-roundtable",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Round-table delivery for Oh My Pi: seats hold identity tickets derived from GitHub facts.",
   "type": "module",
   "license": "MIT",
