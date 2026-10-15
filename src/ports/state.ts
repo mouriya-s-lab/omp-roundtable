@@ -1,0 +1,176 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { z } from '@oh-my-pi/omptype/zod';
+import { agendaIdSchema } from '../domain/model.ts';
+import type { Agenda, AgendaId, Result } from '../domain/model.ts';
+import { parseAgenda } from '../domain/parse.ts';
+import type { AgendaFiles, FileMetrics, StateError } from './contracts.ts';
+
+const envelopeSchema = z.object({
+  format: z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+  state: z.unknown(),
+}).strict();
+
+type StateResult<T> = Result<T, StateError>;
+
+function failure<T>(kind: StateError['kind'], message: string): StateResult<T> {
+  return { ok: false, error: { kind, message } };
+}
+
+function unavailable<T>(operation: string, error: unknown): StateResult<T> {
+  return failure('unavailable', `${operation}: ${error instanceof Error ? error.message : 'Filesystem operation failed'}`);
+}
+
+function decode(contents: string, id: AgendaId): StateResult<Agenda> {
+  let value: unknown;
+  try {
+    value = JSON.parse(contents);
+  } catch {
+    return failure('corruptState', `Agenda ${id}: invalid JSON`);
+  }
+  if (typeof value === 'object' && value !== null && 'format' in value
+    && typeof value.format === 'number' && Number.isInteger(value.format) && value.format !== 3) {
+    return failure('unsupportedFormat', `Agenda ${id}: unsupported format ${value.format}`);
+  }
+  const parsed = envelopeSchema.safeParse(value);
+  if (!parsed.success) return failure('corruptState', `Agenda ${id}: invalid state envelope`);
+  const state = parseAgenda(parsed.data.state);
+  if (!state.ok) return failure('corruptState', `Agenda ${id}: ${state.error.path}: ${state.error.reason}`);
+  if (state.value.id !== id) return failure('corruptState', `Agenda ${id}: envelope identity does not match filename`);
+  return state;
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  const handle = await open(directory, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/** A single controller owns writes; expectedVersion is not a cross-process CAS. */
+export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): AgendaFiles {
+  const directory = join(dataDir, 'state');
+  let preparation: Promise<void> | undefined;
+  async function prepareDirectory(): Promise<void> {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    let current = await realpath(directory);
+    for (;;) {
+      await syncDirectory(current);
+      const parent = dirname(current);
+      if (parent === current) return;
+      current = parent;
+    }
+  }
+  function prepare(): Promise<void> {
+    // This port owns directory creation. Complete its durability once per
+    // instance; a failed initialization must repeat the entire ancestor chain.
+    return preparation ??= prepareDirectory().catch(error => {
+      preparation = undefined;
+      throw error;
+    });
+  }
+
+  async function load(id: AgendaId): Promise<StateResult<Agenda>> {
+    if (!agendaIdSchema.safeParse(id).success) return failure('corruptState', 'Invalid agenda filename identity');
+    let contents: string;
+    try {
+      contents = await readFile(join(directory, `${id}.json`), 'utf8');
+    } catch (error) {
+      return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
+        ? failure('notFound', `Agenda ${id} was not found`)
+        : unavailable(`Read agenda ${id}`, error);
+    }
+    return decode(contents, id);
+  }
+
+  async function list(): Promise<StateResult<readonly Agenda[]>> {
+    let names: string[];
+    try {
+      names = await readdir(directory);
+    } catch (error) {
+      return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
+        ? { ok: true, value: [] }
+        : unavailable('List agendas', error);
+    }
+    const states: Agenda[] = [];
+    for (const name of names.sort()) {
+      if (!name.endsWith('.json')) continue;
+      const state = await load(name.slice(0, -5));
+      if (!state.ok) return state;
+      states.push(state.value);
+    }
+    return { ok: true, value: states };
+  }
+
+  async function save(expectedVersion: number | null, supplied: Agenda): Promise<StateResult<null>> {
+    const parsed = parseAgenda(supplied);
+    if (!parsed.ok) return failure('corruptState', `${parsed.error.path}: ${parsed.error.reason}`);
+    if (expectedVersion !== null && (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1)) {
+      return failure('versionConflict', 'Expected version must be a positive integer or null');
+    }
+    const state = parsed.value;
+    const target = join(directory, `${state.id}.json`);
+    // Capture the complete target once, before any I/O. Retrying never recomputes a transition.
+    const contents = `${JSON.stringify({ format: 3, state })}\n`;
+    const previous = await load(state.id);
+    if (!previous.ok && previous.error.kind !== 'notFound') return previous;
+
+    if (previous.ok && JSON.stringify(previous.value) === JSON.stringify(state)) {
+      // Rename may already have succeeded while directory fsync failed. Repair
+      // durability against the actual target without replacing unchanged content.
+      try {
+        await prepare();
+        const handle = await open(target, 'r');
+        try {
+          await handle.chmod(0o600);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await syncDirectory(directory);
+        return { ok: true, value: null };
+      } catch (error) {
+        return unavailable(`Sync agenda ${state.id}`, error);
+      }
+    }
+
+    if (previous.ok ? previous.value.version !== expectedVersion : expectedVersion !== null) {
+      return failure('versionConflict', `Agenda ${state.id}: expected ${expectedVersion ?? 'no existing state'}, found ${previous.ok ? previous.value.version : 'no existing state'}`);
+    }
+
+    const temporary = join(directory, `.${state.id}.${randomUUID()}.tmp`);
+    let temporaryCreated = false;
+    let renamed = false;
+    try {
+      await prepare();
+      const handle = await open(temporary, 'wx', 0o600);
+      temporaryCreated = true;
+      try {
+        // chmod also makes 0600 exact when the process umask removes owner bits.
+        await handle.chmod(0o600);
+        await handle.writeFile(contents, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await rename(temporary, target);
+      renamed = true;
+      if (metrics) metrics.replaces += 1;
+      await syncDirectory(directory);
+      return { ok: true, value: null };
+    } catch (error) {
+      return unavailable(`Save agenda ${state.id}`, error);
+    } finally {
+      if (temporaryCreated && !renamed) {
+        // Only our uncommitted temporary file is disposable. Preserve the
+        // original failure if cleanup itself cannot access the filesystem.
+        try { await unlink(temporary); } catch { /* The save result already reports failure. */ }
+      }
+    }
+  }
+
+  return { load, list, save };
+}
