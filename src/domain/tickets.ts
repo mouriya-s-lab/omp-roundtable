@@ -47,7 +47,7 @@ export function tickets(state:Agenda,input:Inputs):readonly Ticket[] {
     const disposition=availability(state,work,input).kind==='held'?'mayWait':'mustRun';
     result.push({agendaId:state.id,id:`work:${work.id}`,revision:work.contentVersion,holder:{kind:'main'},context:state.cases.find(item=>item.id===work.parentCaseId)?.context??{kind:'agenda'},brief:designBrief(state,input,work),allowedReplies:['designCommit','claim'],runDisposition:disposition,attentionRequired:disposition==='mustRun'});
   }
-  for(const item of state.cases)if(item.state.kind==='open'||item.state.kind==='awaitingExternal')result.push({agendaId:state.id,id:`case:${item.id}`,revision:item.contentVersion,holder:{kind:'main'},context:item.context,brief:caseBrief(state,input,item),allowedReplies:['decision'],runDisposition:item.state.kind==='awaitingExternal'?'mayWait':'mustRun',attentionRequired:item.state.kind==='open'});
+  for(const item of state.cases)if(item.state.kind==='open'||item.state.kind==='awaitingExternal')result.push({agendaId:state.id,id:`case:${item.id}`,revision:item.contentVersion,holder:{kind:'main'},context:item.context,brief:caseBrief(state,input,item),allowedReplies:['decision'],runDisposition:item.state.kind==='awaitingExternal'||input.facts.kind==='unavailable'?'mayWait':'mustRun',attentionRequired:item.state.kind==='open'});
   const activeRequestIds=new Set(result.flatMap(ticket=>ticket.holder.kind==='seat'?[ticket.holder.requestId]:[]));
   for(const request of state.requests){
     const candidate=candidateFor(request,input);

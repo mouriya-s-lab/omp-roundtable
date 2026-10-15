@@ -91,7 +91,7 @@ class ProcessRuntime {
       const newTickets=result.value.tickets.filter(ticket=>ticket.runDisposition==='mustRun'&&!this.reminded.has(`${this.controller!.runId}:${ticket.id}:${ticket.revision}`));
       if(!newTickets.length)return;
       for(const ticket of newTickets)this.reminded.add(`${this.controller.runId}:${ticket.id}:${ticket.revision}`);
-      const content=`Roundtable has current Main work: ${newTickets.map(ticket=>`${ticket.id} revision ${ticket.revision}`).join(', ')}. Read the full injected tickets and use roundtable tickets/reply; relay text is not a protocol response.`;
+      const content='Roundtable requested Main attention. Call roundtable tickets and act only on the current injected tickets; this queued reminder does not establish that an earlier ticket is still actionable. Relay text is not a protocol response.';
       main.pi.sendMessage({customType:'roundtable-attention',content,display:true},{triggerTurn:true,deliverAs:'nextTurn'});
     }).catch(error=>this.failed(error));
   }
