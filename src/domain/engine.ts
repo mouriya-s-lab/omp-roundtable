@@ -1,6 +1,6 @@
 import type {Action,Agenda,Amendment,ApplyingRef,CaseDecision,CaseSubject,Context,ConveneInput,DecisionCase,DeliveryAnchor,DesignRequirement,DomainError,DomainRef,Effect,EffectCancelReason,EffectResult,Entry,Event,Facts,GateJob,GateKind,GateStamp,HoldRef,HostObservation,Inputs,Insertion,IssueRef,Member,OwnerPhase,OwnerWork,PortError,PrSnapshot,ProtocolReply,Receipt,ReplyResult,Result,SeatRequest,ShaRef,SourceChangeCause,SourceCondition,Ticket,Transition,Unit,VerifyRepo,WorkReason} from './model.ts';
 import {agendaIdSchema,conveneSchema,factsSchema} from './model.ts';
-import {availability,bodyHash,canonical,caseOpen,contains,digest,domainObjects,effectOpen,exactClosingBody,gateOf,headContains,memberEnded,memberOf,memberStamp,nextId,publicationAssociation,refKey,repoKey,sameRef,sameRepo,sourceMergedPr,unitEnded,unitOf,verificationContinuity,verificationTargets} from './identity.ts';
+import {availability,bodyHash,canonical,caseOpen,contains,digest,domainObjects,effectOpen,exactClosingBody,gateOf,headContains,issueStateBaselineMatches,memberEnded,memberOf,memberStamp,nextId,publicationAssociation,refKey,repoKey,sameRef,sameRepo,sourceMergedPr,unitEnded,unitOf,verificationContinuity,verificationTargets} from './identity.ts';
 import {parseEvent} from './parse.ts';
 import {tickets} from './tickets.ts';
 import {applyDecision} from './decisions.ts';
@@ -245,7 +245,7 @@ function classifySource(state:Agenda,input:Inputs):void {
     if(member.terminal.kind!=='pending'){
       const establishedAt=member.terminal.kind==='merged'?member.terminal.at:member.terminal.acceptedAt;
       if(issue.state==='open'){
-        if(issue.lastReopen&&issue.lastReopen.at>=establishedAt&&member.reconciledEvent!==issue.lastReopen.id)newCase(state,contextOf(member),{kind:'reopened',member:member.ref,event:issue.lastReopen,bodyHash:issue.bodyHash},'Source reopened a terminal member',input);
+        if(issue.lastReopen&&member.reconciledEvent!==issue.lastReopen.id&&(member.terminal.kind==='noCode'||issue.lastReopen.at>=establishedAt))newCase(state,contextOf(member),{kind:'reopened',member:member.ref,event:issue.lastReopen,bodyHash:issue.bodyHash},'Source reopened a terminal member',input);
         else if(!caseOpen(state,contextOf(member)))addEffect(state,contextOf(member),{kind:'setIssueState',issue:member.ref,open:false,afterEvent:issue.lastReopen,bodyHash:issue.bodyHash});
       }
     }else if(issue.state==='closed')newCase(state,contextOf(member),{kind:'closed',member:member.ref,event:issue.lastClose,bodyHash:issue.bodyHash},'Closed issue has no verified merge or current no-code decision',input);
@@ -299,6 +299,10 @@ function advanceObjects(state:Agenda,input:Inputs):void {
   for(const item of state.cases){
     const initialVersion=item.contentVersion;
     const verification=item.subject;
+    if((verification.kind==='closed'||verification.kind==='reopened')&&(item.state.kind==='open'||item.state.kind==='awaitingExternal')){
+      const issue=issueOf(input,verification.member);const event=verification.kind==='closed'?issue?.lastClose:issue?.lastReopen;
+      if(issue&&(event?.id!==verification.event?.id||issue.state!==(verification.kind==='closed'?'closed':'open')))item.state={kind:'cancelled',reason:'sourceEventSuperseded'};
+    }
     if(verification.kind==='closure'&&verification.cause.kind==='ancestry'&&(item.state.kind==='open'||item.state.kind==='awaitingExternal')&&verification.cause.comparisons.every(pair=>{
       const repo=source(input)?.repos.find(repo=>sameRepo(repo.repo,pair.ancestor.repo));return repo!==undefined&&contains(input,pair.ancestor,repo.defaultHead);
     }))item.state={kind:'cancelled',reason:'sourceEventSuperseded'};
@@ -715,6 +719,7 @@ function acceptReply(state:Agenda,input:Inputs,event:Event & {kind:'reply'}):Res
     }
     case 'designCommit':{
       const work=state.designWorks.find(work=>`work:${work.id}`===event.ticket);if(!work||work.result!==null)return {ok:false,error:error('wrongTicketKind','Design result requires open Main design work')};
+      if(availability(state,work,input).kind==='held')return {ok:false,error:error('pendingClaim','Held design work cannot complete past unresolved dependencies')};
       const facts=source(input);if(!facts)return {ok:false,error:error('sourceUnavailable','Design commit source unavailable')};
       const exists=facts.commits.some(commit=>sameRepo(commit.repo,payload.commit.repo)&&(commit.ancestor===payload.commit.sha||commit.descendant===payload.commit.sha)&&commit.result==='contains')||facts.branches.some(branch=>sameRepo(branch.repo,payload.commit.repo)&&branch.state.kind==='present'&&branch.state.head===payload.commit.sha)||facts.repos.some(repo=>sameRepo(repo.repo,payload.commit.repo)&&repo.defaultHead===payload.commit.sha);
       if(!exists)return {ok:false,error:error('missingDesignCommit','Design commit is not source-verified remotely')};
@@ -792,7 +797,7 @@ export function satisfiedResult(state:Agenda,effect:Effect,input:Inputs):EffectR
     case 'replaceBody':return issueOf(input,action.edit.issue)?.bodyHash===bodyHash(action.edit.body)?{kind:'bodyReplaced',issue:action.edit.issue,hash:bodyHash(action.edit.body)}:null;
     case 'setIssueState':{
       const issue=issueOf(input,action.issue);const event=action.open?issue?.lastReopen:issue?.lastClose;
-      return issue?.state===(action.open?'open':'closed')&&(!action.afterEvent||!!event&&event.at>=action.afterEvent.at)?{kind:'issueState',issue:action.issue,open:action.open,event:event??null}:null;
+      return issue?.state===(action.open?'open':'closed')&&issue.bodyHash===action.bodyHash&&issueStateBaselineMatches(action,issue)?{kind:'issueState',issue:action.issue,open:action.open,event:event??null}:null;
     }
     case 'rerunChecks':{const run=facts.checkAttempts.find(run=>sameRepo(run.repo,action.repo)&&run.workflowRunId===action.workflowRunId&&run.attempt>action.previousAttempt&&run.head===action.head);return run?{kind:'rerun',repo:action.repo,workflowRunId:action.workflowRunId,attempt:run.attempt}:null;}
     case 'merge':{const pr=prOf(input,action.pr);return pr?.state.kind==='merged'&&pr.head===action.head&&canonical(pr.target)===canonical(action.target)?{kind:'merged',pr:pr.ref,merge:{repo:pr.target.repo,sha:pr.state.sha},at:pr.state.at}:null;}
@@ -840,11 +845,11 @@ export function effectPrecondition(state:Agenda,effect:Effect,input:Inputs):Resu
       const member=memberOf(state,action.member);
       if(!member||issueOf(input,member.ref)?.state!=='open'||issueOf(input,member.ref)?.bodyHash!==member.contract.bodyHash||baseOf(input,member)?.state.kind!=='present')return {ok:false,error:error('premiseChanged','Publication contract, issue state or target base changed')};
       if(!member||branch?.state.kind!=='present'||branch.state.head!==action.submission.payload.head)return {ok:false,error:error('premiseChanged','Accepted publication head changed')};
-      if(action.pr){const pr=prOf(input,action.pr);if(!pr||pr.state.kind!=='open'||pr.bodyHash!==action.expectedBodyHash&&pr.body!==action.body)return {ok:false,error:error('premiseChanged','Publication body conflict or PR target disappeared')};}
+      if(action.pr){const pr=prOf(input,action.pr);if(!pr||!publicationAssociation(state,effect,pr,input)||pr.head!==action.submission.payload.head||pr.bodyHash!==action.expectedBodyHash&&pr.body!==action.body)return {ok:false,error:error('premiseChanged','Publication association, authorization, head or body changed')};}
       break;
     }
     case 'replaceBody':if(issueOf(input,action.edit.issue)?.bodyHash!==action.edit.expectedHash&&issueOf(input,action.edit.issue)?.bodyHash!==bodyHash(action.edit.body))return {ok:false,error:error('premiseChanged','Issue body conflict')};break;
-    case 'setIssueState':{const issue=issueOf(input,action.issue);if(!issue||issue.bodyHash!==action.bodyHash||action.afterEvent&&((issue.lastClose&&issue.lastClose.at>action.afterEvent.at)||(issue.lastReopen&&issue.lastReopen.at>action.afterEvent.at)))return {ok:false,error:error('premiseChanged','Lifecycle or body advanced beyond state decision')};break;}
+    case 'setIssueState':{const issue=issueOf(input,action.issue);if(!issue||issue.bodyHash!==action.bodyHash||!issueStateBaselineMatches(action,issue))return {ok:false,error:error('premiseChanged','Lifecycle or body advanced beyond state decision')};break;}
     case 'attachChild':if(!issueOf(input,action.parent)||!issueOf(input,action.child))return {ok:false,error:error('sourceUnavailable','Attachment source missing')};break;
     case 'rerunChecks':{const run=facts.checkAttempts.find(run=>sameRepo(run.repo,action.repo)&&run.workflowRunId===action.workflowRunId);const pr=prOf(input,action.pr);if(!pr||pr.state.kind!=='open'||pr.head!==action.head||!run||run.head!==action.head||run.attempt!==action.previousAttempt)return {ok:false,error:error('premiseChanged','PR head or workflow attempt source changed')};break;}
     case 'createIssue':{
@@ -874,7 +879,7 @@ function actionObsolete(state:Agenda,effect:Effect,input:Inputs):boolean {
     case 'rerunChecks':{const pr=prOf(input,action.pr);return !!pr&&(pr.state.kind!=='open'||pr.head!==action.head);}
     case 'setIssueState':{
       const issue=issueOf(input,action.issue);if(!issue)return false;
-      return issue.bodyHash!==action.bodyHash||action.afterEvent!==null&&[issue.lastClose,issue.lastReopen].some(event=>event!==null&&event.at>action.afterEvent!.at);
+      return issue.bodyHash!==action.bodyHash||!issueStateBaselineMatches(action,issue);
     }
     case 'createIssue':case 'attachChild':case 'replaceBody':return false;
     default:{const exhaustive:never=action;return exhaustive;}
@@ -953,7 +958,7 @@ function observeHostDeliveries(state:Agenda,host:HostObservation,projected:reado
     if(ticket.holder.kind!=='seat'||ticket.runDisposition!=='mustRun')continue;
     const requestId=ticket.holder.requestId;const request=state.requests.find(request=>request.id===requestId);if(!request||request.binding.kind!=='bound')continue;
     const binding=request.binding;const seat=host.seats.find(seat=>seat.agentId===binding.agentId&&seat.parentId===binding.parentId&&seat.status!=='aborted');if(!seat)continue;
-    const previous=state.effects.filter(effect=>effect.action.kind==='wake'&&effect.action.ticket===ticket.id&&effect.action.revision===ticket.revision&&effect.action.holder===seat.agentId&&effect.action.runId===host.runId);
+    const previous=state.effects.filter(effect=>effect.action.kind==='wake'&&effect.action.ticket===ticket.id&&effect.action.revision===ticket.revision&&effect.action.holder===seat.agentId&&effect.action.runId===host.runId&&!(effect.state.kind==='cancelled'&&effect.attempt===0));
     for(const effect of previous){
       const status=effect.state;
       if(status.kind==='confirmed'&&status.result.kind==='delivered'){
@@ -1001,8 +1006,9 @@ export function transition(original:Agenda,input:Inputs,rawEvent:Event):Transiti
     if(!mainCaller(input,event.caller))return {kind:'rejected',error:error('unauthorized','Main-only classification')};
     const current=state.units.find(unit=>!unitEnded(state,unit,input));const member=current?.members.find(member=>sameRef(member.ref,event.member));const issue=issueOf(input,event.member);
     if(member?.terminal.kind==='noCode'&&member.terminal.bodyHash===event.bodyHash&&member.terminal.reason===event.reason)return {kind:'same',reply:null};
-    if(!member||member.terminal.kind!=='pending'||!issue||issue.bodyHash!==event.bodyHash||state.effects.some(effect=>effect.scope.kind==='member'&&sameRef(effect.scope.member,event.member)&&(effect.state.kind==='executing'||effect.state.kind==='uncertain')))return {kind:'rejected',error:error('premiseChanged','No-code requires exact pending current member and fresh source without unconfirmed writes')};
+    if(!member||member.terminal.kind!=='pending'||!issue||issue.bodyHash!==event.bodyHash||input.facts.kind!=='available'||sourceMergedPr(member,input.facts.facts)||state.effects.some(effect=>effect.scope.kind==='member'&&sameRef(effect.scope.member,event.member)&&(effect.state.kind==='executing'||effect.state.kind==='uncertain')))return {kind:'rejected',error:error('premiseChanged','No-code requires exact pending current member and fresh source without a real merge or unconfirmed writes')};
     finishOwner(member,'noCode',{kind:'confirmNoCode',bodyHash:event.bodyHash,reason:event.reason});
+    member.reconciledEvent=issue.lastReopen?.id??null;
     member.terminal={kind:'noCode',bodyHash:event.bodyHash,reason:event.reason,acceptedAt:event.acceptedAt};invalidateGates(member,'superseded');
   }else if(event.kind==='resume'){
     if(event.runId!==input.host.runId)return {kind:'rejected',error:error('ownershipBlocked','Resume run must be actual current host run')};
@@ -1065,7 +1071,9 @@ export function transition(original:Agenda,input:Inputs,rawEvent:Event):Transiti
           const holderAbsent=action.kind==='wake'&&(action.runId!==input.host.runId||!input.host.seats.some(seat=>seat.agentId===action.holder&&seat.status!=='aborted'));
           const pr=action.kind==='merge'?prOf(input,action.pr):undefined;
           const mergedInapplicable=action.kind==='merge'&&pr!==undefined&&(pr.state.kind==='closed'||pr.state.kind==='merged'&&(pr.head!==action.head||canonical(pr.target)!==canonical(action.target)));
-          if(!holderAbsent&&!mergedInapplicable)return {kind:'rejected',error:error('premiseChanged','An unknown write cannot be cancelled without source proof of inapplicability')};
+          const issue=action.kind==='setIssueState'?issueOf(input,action.issue):undefined;
+          const lifecycleInapplicable=action.kind==='setIssueState'&&issue!==undefined&&!issueStateBaselineMatches(action,issue);
+          if(!holderAbsent&&!mergedInapplicable&&!lifecycleInapplicable)return {kind:'rejected',error:error('premiseChanged','An unknown write cannot be cancelled without source proof of inapplicability')};
         }
         cancelEffect(state,effect,event.reason,input);break;
       }

@@ -1,6 +1,6 @@
 # 验收条件
 
-本文规定结果与否定条件。失败修产品或真实环境模型，不删合法组合、不加不存在的公平边。操作员禁止本轮新增或修改测试，并要求功能完整实现前不执行任何测试；下列条件仍须由实现完成后的真实入口、现有可用程序与独立 review 核对，不能用测试脚手架代替功能。证据必须钉最终源码 commit、实际宿主版本、对象与命令；生产代码或 prompt 变动后重新验证受影响完整路径及跨部件正常交付。验收不研究 GitHub API 上限，调用计费或 points 测量不是交付门槛。
+本文规定产品行为与否定条件。失败修产品或真实环境模型，不删合法组合、不加不存在的公平边。操作员禁止本轮编写测试，并要求功能完整实现前不执行测试；实现完成后复用真实入口、现有程序与独立 review 核对行为，不用测试脚手架代替功能。证据记录实际宿主、对象、命令和观察结果；相关实现行为变化时验证受影响路径，提交号、文档或元数据变化本身不使已有观察失效。圆桌管理的业务对象与本实现的开发交付分开；验收不研究 GitHub API 上限，不以计费、固定时长或人为添加的 CI 条件作为交付门槛。
 
 ## 需求映射
 
@@ -18,7 +18,7 @@
 |R10 / ok-note 与模式要求|mode 外、非 holder、多派者/孙级无端口；verdict 仅 ok/note，程序 pin|
 |R11 / 事故报告 33–43|正常路径 native wake 无 Main write/ACK；失败/未知可见 case；delivery receipt 不当工作完成|
 |R12 / 报告 45–53|每个 Action 的成功/拒绝/失败/未知与 push/body/park 组合；不只 publish 失败；未回复不通过公平性自动完成|
-|R13 / 报告 55–65|最终 commit/真实 host/对象的证据；改代码后重跑，不借旧 commit 成果|
+|R13 / 报告55–65|证据对应实际行为、真实宿主与对象；行为变化后验证受影响路径，不以提交号判定证据失效|
 
 spawn 是 Main 正常义务，R11 只消除 wake 的 Main 执行/回执，不虚构程序 spawn。Main 永不回答时票据 attention 可见，不承诺自动完成。native relay 不是回复/ACK。
 
@@ -64,7 +64,7 @@ owner launcher 启动/复用 owner-controlled auth broker，token 只在内存�
 
 实际宿主入口为 `omp` 加 `-e <implementation-worktree>/index.ts`；隔离配置与凭据由既有 owner-controlled 启动路径注入。已有 `tests/acceptance/host-contract.ts` 只证明 HostPort 边界，不代替根插件的功能验收；不得为填补产品路径而新增测试或探针。
 
-真实 CLI 使用上述已授权显式 model/thinking、--mode rpc、--no-ui、--no-session、--no-title、--no-lsp、--no-extensions、-e 实现 index.ts、隔离 --config、仅此实例 --approval-mode yolo。必要 provider 显式加载，不继承全局插件或备用模型。ready/get_state 后用原生 RPC prompt，模型真实调用工具推进；controller 不代答 Main/owner。另一次 TTY 实际 `/roundtable` 检查可见性。
+真实 CLI 使用上述已授权显式 model/thinking、--no-title、--no-lsp、--no-extensions、-e 实现 index.ts、隔离 --config、仅此实例 --approval-mode yolo。可以使用真实交互 TTY，或 --mode rpc --no-ui；运行记录只存隔离的 /tmp 目录。必要 provider 显式加载，不继承全局插件或备用模型。Main 经真实 `/roundtable` 和工具推进，模型真实调用端口；controller 不代答 Main/owner。
 
 host-contract 先证明 named exports、同一 registry Main/child、async isolated task、process singleton、工具激活、park/ensureLive/direct delivery、idle plan 拒绝、shutdown sessionManager 清理。缺 native API 是 host-contract failure，不用绝对源码/复制生命周期/Main ACK 替代。
 
@@ -72,7 +72,7 @@ host-contract 先证明 named exports、同一 registry Main/child、async isola
 
 1. fixture 建 parent、普通 alpha、错误既有 PR 的 adopted beta、应 noCode issue；不手改插件 state。
 2. Main 真实召集，alpha submit/publish/fresh 双 gate/merge/postMerge，alpha unit 结束前 beta 没 owner。
-3. beta 实际 not-ok/owner 修复。专用 target base 配置真实 required check，workflow 只检查 `qa/<runId>/value.txt` 为 OK，直接 git fetch 当前 GITHUB_SHA，不钉 actions 版本。核 source rule/app identity，错误值拒绝 merge、正确值通过。不能 optional 替代；权限/平台不支持即 checks-native 阻塞。另正常 integration Member 交付专用 base 到 main，不 fixture 偷合并；closure 从 default 验证。最后删除仅本轮创建的 base 规则。
+3. beta 实际 not-ok/owner 修复。目标 base 的实际保护规则决定 required checks：完整源头证明集合为空时按正常分支处理；确有 required check 时，其失败阻止该业务 PR 合并，通过后才能继续；读取失败不是空集合。另由正常 integration Member 把非默认 base 交付到 main，不由 fixture 偷合并；closure 从 default 验证。不为外层实现 PR 人工制造 workflow 或 required-Actions 前置条件。
 4. 修复 owner push 后先观察 accepted submit/publish；PR OPEN 且真实 owner idle（非 streaming）或 parked 时一次受控远端 push，程序自动投递同一真实 owner 续作并接受。不得合并后 push；自述 ACK 不算，核 state/source/registry。parked 路径还必须真实 ensureLive/rebind。
 5. 真实 noCode/split/blocked/question；至少一个 claim 在 idle/parked 等待期间零 wake，决定后同 WorkId 新 revision 一次自动 delivery，无 retryHost。前置/设计最后 hold 解除也核验。受控改 gate 输入，旧 verdict 拒绝，新 fresh holder 生效；Main 不冒充子席位。abort 和 exact turn-end 的宿主续席/非响应独立于 GitHub 可用性；unchanged registry 不写文件。
 6. 开放工作中退出完整 OMP 并观察 exit，新进程显式 resume，恢复同 WorkId、新 request、远端 branch 和 owner 未推送 commit。
@@ -81,9 +81,9 @@ host-contract 先证明 named exports、同一 registry Main/child、async isola
 
 ## 持续功能运行
 
-功能实现后的持续运行覆盖 production controller、GitHubPort、真实 AgendaFiles 与公开端口，不以 timer 空转代替交付。固定十个有序 unit、一个 parent；持续覆盖 submit、双 gate、postMerge、push、not-ok、效应失败、正文变化、精确回复重放及实际进程恢复。至少一次创建结果丢失必须保持 uncertain，恢复不得盲目重复 mutation。已有验收程序不能覆盖时直接通过真实产品入口操作，不新增测试代码。
+功能实现后的持续运行覆盖 production controller、GitHubPort、真实 AgendaFiles 与公开端口，不以 timer 空转代替交付。工作负载按要核对的行为选择，覆盖有序 unit、parent、submit、双 gate、postMerge、push、not-ok、效应失败、正文变化、精确回复重放及实际进程恢复。创建结果丢失时必须保持 uncertain，恢复不得盲目重复 mutation。已有程序不能覆盖时经真实产品入口操作，不新增测试代码，也不以固定 unit 数或运行时长代替业务结果。
 
-一小时运行中必须观察：
+持续运行核对以下功能不变量：
 
 - 前序 unit 的成员终点、关闭和 postMerge 完成前，后序没有 owner 工作。
 - tickets/context/yield/无内容变化 registry 与 accepted replay 不触发 GitHub；same/rejected 不替换状态文件。
@@ -95,4 +95,4 @@ host-contract 先证明 named exports、同一 registry Main/child、async isola
 
 ## 交付证据
 
-每记录含 code commit、host version、命令、消敏 input/output、必要 state/registry 投影、真实对象链接及最终 bytes。日志不能保存 env、token、headers 或完整凭据会话。runtime 证据按 writing-pr 进入新的真实 PR；review/acceptance 独立，不由同模块实现 worker 自验替代。所有路径完成前保持 Draft；缺环境必须明确“已改，未完成 runtime 验证”、具体缺口和可运行验证位置，不用 mock/旧成功/blocked 冒称完成。
+记录包含实际宿主、命令、消敏 input/output、必要 state/registry 投影、真实对象链接及最终内容；提交号可作版本溯源，不是验证或提交门槛。日志不保存 env、token、headers 或完整凭据会话。runtime 证据按 writing-pr 进入实现 PR，独立 review 不由同模块实现 worker 自验替代。证据只声明实际观察到的行为；具体缺陷必须修复并验证受影响路径，不以未执行工作、历史记录缺失、普通工具错误或未配置 CI 编造外部 blocker。

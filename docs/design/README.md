@@ -33,6 +33,8 @@ Roundtable 在一个 OMP 进程内串行交付有序 GitHub issue。它维护本
 
 产品只支持一个进程、一个 active Agenda、一个串行写者。version 比较防止该进程的陈旧写入，不是跨进程原子 CAS；本系统不加 pid 锁、租约或跨进程对账。resume 的旧进程结束确认是受信操作员声明或已经观察的 exit，不是程序证明。
 
+这些协议约束适用于运行中 Agenda 管理的业务 issue、PR、席位和效应。圆桌实现本身的开发、提交、验证和 PR 交付不继承业务对象的 ticket、gate、head 或 checks 生命周期；沙盒对象是功能输入与证据，不是外层交付的外部依赖。
+
 ```mermaid
 flowchart TB
   P[OMP 单进程] --> C[串行 Controller]

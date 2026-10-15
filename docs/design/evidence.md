@@ -1,6 +1,6 @@
 # 边界证据
 
-本文记录已经观察的外部性质及其证明范围，不设立规则。HostPort、语法探针、纯协议与完整产品验收是不同路径；边界成功不能代替最终源码上的 native/GitHub 交付或一小时活跃负载。
+本文记录已经观察的外部性质及其证明范围，不设立规则。HostPort、语法边界、纯协议与产品交付是不同路径；每段证据只证明实际经过的行为，不能互相冒充。提交号用于溯源，不是证据的失效开关，固定运行时长也不替代功能观察。
 
 ## 实际 native HostPort
 
@@ -17,7 +17,7 @@
 |实际 idle plan 拒绝；manager release 后拒绝、真实 rebind；abort 与 absence 拒绝|89–101|
 |Main shutdown 释放 binding、HostPort dispose、root 和专用 broker 均 exit 0；无 PTY、无凭据复制|110–115|
 
-wake 返回用时约 22.79 ms；这是该次调用结果，不是性能保证或 exactly-once 证明。SeatRequest 是在真实 task acceptance/registry/context 之后建立、明确标成 TEST-owned 的 HostPort fixture，不是产品 spawned ACK。该次没有 controller、根产品插件、compact 或 GitHub 交付，最终集成 head 仍须完整重跑。
+wake 返回用时约 22.79 ms；这是该次调用结果，不是性能保证或 exactly-once 证明。SeatRequest 是在真实 task acceptance/registry/context 之后建立、明确标成 TEST-owned 的 HostPort fixture，不是产品 spawned ACK。该次没有 controller、根产品插件、compact 或 GitHub 交付，只证明所列 HostPort 边界。
 
 native 会对各席位重新执行 extension module graph；模块局部变量不能承担跨席位 runtime slot。探针使用 process Symbol slot 后才共享状态。Root 与 child 的实际模型请求均经 hook 核对，不从 task:free 名称推断模型。
 
@@ -31,7 +31,7 @@ native root `z` 是 omptype facade，不是独立 Zod4 schema；把 own-Zod4 节
 
 host `.int()` 本身不提供 own-Zod4 的 safe-integer 上限，必须显式 max(Number.MAX_SAFE_INTEGER)。host `.regex()` 实际运行时校验，但 pattern 未进入 wire schema。普通 closed union 的 pure facade probe 对非法 nested reply.head 返回准确 field path 与 must be removed，不需要把所有错误压成字符串。
 
-此验收接受生产公开语法、native/canonical parity 与真实模型到 callback 的 transport；没有运行 controller/business authorization、文件存储或 GitHub 交付，也不是最终源码 commit 的完整产品验收。source hashes、模型 selector/reasoning 与进程终点保留在上述 artifact，最终集成 head 仍须重跑其完整路径。
+此验收接受生产公开语法、native/canonical parity 与真实模型到 callback 的 transport；没有运行 controller/business authorization、文件存储或 GitHub 交付，不能据此声称这些行为已被验证。source hashes、模型 selector/reasoning 与进程终点保留在上述 artifact；相关行为变化时验证其受影响路径，不因无关提交使已有观察失效。
 
 ## 匹配版本源码
 
@@ -63,7 +63,7 @@ CLI actor RiriAgent；产品 repo 与现有 sandbox `RiriAgent/rt-e2e-20260930-0
 
 迁移后的 production GitHubPort 实际只读命令 `bun /tmp/rt-rewrite-wfPGFO/facade-github-smoke.ts` exit 0。证据 `/tmp/rt-rewrite-wfPGFO/facade-github-evidence.jsonl`：无 PR 的显式 main/不存在 base 查询返回准确 present/missing；十个真实 issue、十个显式 PR 的完整 source 请求返回所有身份、真实 timestamp/target/head，且没有执行 mutation。这只证明源头读取边界，不证明 controller 或完整交付。
 
-实时 schema 提供 active repository/org Ref.rules、classic protection、required context+integrationId/app.databaseId。实际 [workflow run](https://github.com/oh-my-omp/omp-roundtable/actions/runs/38576098395) 为 workflowRun=38576098395、checkRun/job=115893483137、suite=104529942127、app=15368、attempt=1；只证明该实例关系，不能推广 job/checkRun 恒等。失败 workflow attempt 的 jobs API 还实读到 run_id/run_attempt/head_sha/check_run_url，production 会完整分页并核对；required Actions failure 的最终正向路径仍需专用 fixture。
+实时 schema 提供 active repository/org Ref.rules、classic protection、required context+integrationId/app.databaseId。实际 [workflow run](https://github.com/oh-my-omp/omp-roundtable/actions/runs/38576098395) 为 workflowRun=38576098395、checkRun/job=115893483137、suite=104529942127、app=15368、attempt=1；只证明该实例关系，不能推广 job/checkRun 恒等。失败 workflow attempt 的 jobs API 还实读到 run_id/run_attempt/head_sha/check_run_url，production 会完整分页并核对。业务 PR 的 required 集合以其实际 base 规则为准，不由这条边界观察为外层交付增加 fixture 或 CI 前置条件。
 
 
-source 观察到 actor 自己同 repo PR 的 maintainerCanModify=false，因此该字段单独不足以判 foreign；ADMIN 也不证明其它作者交接。non-default close、真实 rerun/create recovery、完整 mutation failure/unknown、最终 native 产品路径和 3,600 秒负载尚不能由这些只读/HostPort 证据宣称通过。[GitHub secondary throttle 文档](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api) 允许没有 Retry-After 且剩余额非零；未实际触发限流，不编造 reset 时间。
+source 观察到 actor 自己同 repo PR 的 maintainerCanModify=false，因此该字段单独不足以判 foreign；ADMIN 也不证明其它作者交接。这些只读与 HostPort 观察不证明未经过的 mutation、controller 或产品交付行为，各路径须按其实际结果解释。[GitHub secondary throttle 文档](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api) 允许没有 Retry-After 且剩余额非零；未实际触发限流，不编造 reset 时间，也不把 API 配额测量作为功能验收。

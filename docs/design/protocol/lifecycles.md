@@ -27,7 +27,7 @@ flowchart TB
 |Unit|召集或接受 insertion 建立|全部成员终点/关闭对账/内层终结，覆盖全成员 fresh postMerge 通过；全 noCode 也有独立 fresh job/holder，覆盖 noCode hash/reason、契约与关闭状态|
 |Member|真实 IssueRef 进入 unit|真实 merge 或当前有效 noCode，必要关闭及其工作/case/效应已终结|
 |OwnerWork|源头或接受决定一次转移创建|accepted submit、明确 noCode/replacePr/sourceRestored 决定或真实外部 merge|
-|DesignWork|接受 upholdMain/designGap 建立|真实远端 ShaRef 源头验证后接受 designCommit|
+|DesignWork|接受 upholdMain/designGap 建立|依赖解除后，真实远端 ShaRef 源头验证并接受 designCommit；本人未决 claim 不得绕过|
 |GateJob|输入完整且无阻塞时建立新 JobId|接受 verdict 或明确 cancelled；失败有独立 case 继续负责|
 |DecisionCase|精确源头事件、claim、not-ok 或运维失败|无需孩子的合法决定可同次 resolved；有孩子仅全部成功；或固定闭合取消理由|
 |Effect|接受回复或 observe 建立 durable 意图|源头/宿主确认或精确合法取消；失败/未知/等待均非终点|
@@ -92,14 +92,20 @@ failed/uncertain 保留真实调用的 startedAt 与 create/publish 实际返回
 
 
 取消 reason 仅为 preconditionChanged、targetBecameInapplicable、superseded、holderAbsent、sourceAlreadyAdvanced。ready/failed 可取消；executing/uncertain 一般必须由源头证明原意图不再适用且无待确认写入。merge 只在 exact head/target 都匹配的真实 MERGED 时成功；同 PR 不同 head/target 的最终 merge 或 closed-unmerged 只能使旧意图不适用。仅当整个直接运维决定确已过时，才连同其 precise applying EffectRef 取消原 case；取消嵌套 body/create/attach 不会使 Amendment/accepted finding 成功。取消 publication 原子恢复准确 previous 关联及保留 accepted submission/receipt，并开放实际剩余工作；目标已经满足应 effectSatisfied，wake 永不 effectSatisfied。
+setIssueState 的 afterEvent 固定执行方向的反向源头事件：open 记录 lastClose，close 记录 lastReopen，包含 null 基准。执行、已有目标确认和过时判断均比较精确 event id，并保留正文 hash 前提；后来的反向事件使旧意图失效，同秒不同事件不能凭时间相等通过。Main 生命周期决定另核 case subject 仍是当前同方向事件；过期的未决 case 由 sourceEventSuperseded 取消，最新源头另开当前 case。noCode 接受时记录已见 lastReopen id，后续新 reopen 按身份识别，不把 GitHub 秒级时间与本地 acceptedAt 比较。
+
 
 uncertain publish 的唯一附加恢复例外是 Main adoptResult 明确选择当前真实 OPEN PR。必须匹配 head repo/branch、target、实际 branch head、维护授权，且无其它 Member/活跃 publisher 占有；收到过 response identity 时只能选择它。head/title/body 全匹配则普通 confirmed，不造修复工作；已前进则旧 Effect cancelled(sourceAlreadyAdvanced)，以 origin adopted 安装明确关联，旧 AcceptedSubmission/owner terminal receipt 保持不变，同时建 sourceChange OwnerWork，以实际 PR head 为工作起点。新 owner submit 和 publication 确认前不能 gate/merge。此决定显式承担旧未知远端写可能晚到的风险，不声称取消了 GitHub RPC；晚到正文变化仍使 review/preflight 失效。该例外不允许 ready/knownFailed、closed/merged 候选或其它 Action 借此重发。
+replacePr 只放弃已登记的 exact PR，不得清除未确认 publication 的关联；先完成该 Effect 的确认或合法恢复，再决定是否替换。既有 PR 的 publication 调用前重新核源头维护授权、准确关联、accepted head 与正文前提。
+
 
 GitHub 确定失败自动开 effectFailure case。wake 的投递失败/未知仍由 Effect 保存错误，Main 的 hostPrecondition.seatNonresponse 精确引用该 Effect/Request；retryHost 是显式承担重复风险的一次例外，不能当普通自动重试。旧 uncertain wake 未确认或合法取消前不能被新 work 静默覆盖。若已 confirmed 但无回复，retryHost 创建新 EffectId，不复活 confirmed；普通确定失败 retry 可保持同意图 ID 并增加 attempt。当前 run 未知投递不能凭 live 确认；完整旧进程退出后旧 run holder 不存在才取消旧意图、新 binding 续作。
 
 Main 对 failed/uncertain wake 的 retryHost 在同一次转移中保存明确重复风险授权，并使原 Effect 回到 ready；下一次真实调用 attempt 加一。它是 create retryAfterAbsence 之外唯一允许 unknown 再投递的特例，不推广到 merge/rerun/body。confirmed 后无回复的再次投递才创建新 EffectId。idle plan precheck 明确拒绝且未调用 deliver 时记录 knownFailed，直到宿主实际退出 idle plan 才允许 retryHost。
 
 当前内容版本已有 injected 或 woken receipt、没有协议回复，且 HostObservation.turnEnds 含当前 run/holder/该 messageId 的真实 post-delivery agent_end 时，observe 创建精确 hostPrecondition.seatNonresponse case。单纯 parked/idle 或尚未运行的 delivery 队列不证明回合结束；registry status 不能代替该 exact tuple。Main 自己未答只投影 attentionRequired，不递归创建自身不响应 case。
+未发送且 attempt 为 0 的 cancelled wake 不占用成功或未知投递的去重槽；临时 source unavailable 解除后，同一当前 gate 仍可获得首次投递。已确认、未知或实际尝试过的投递不能因此遗忘。
+
 已经源头合并的 carrier 不因尚无 default design ancestry 就变成 orphan。其真实 merge 保持终点，所需提交在指定 postMerge/default closure 的包含关系必须另由源头证明；明确 negative 引出实际验收修正。noCode、放弃或 closed-unmerged 使未落地设计失去承载时才走原 orphan/migration 义务，不删除原 ShaRef。
 
 

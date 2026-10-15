@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import type {Agenda,Context,DomainRef,Effect,Facts,GateJob,HoldRef,Inputs,IssueRef,Member,MemberStamp,OwnerWork,PrSnapshot,Repo,ShaRef,Unit,VerifyRepo,WorkAvailability} from './model.ts';
+import type {Action,Agenda,Context,DomainRef,Effect,Facts,GateJob,HoldRef,Inputs,IssueRef,IssueSnapshot,Member,MemberStamp,OwnerWork,PrSnapshot,Repo,ShaRef,Unit,VerifyRepo,WorkAvailability} from './model.ts';
 
 export function canonical(value:unknown):string {
   if(value===null||typeof value!=='object')return JSON.stringify(value)??'null';
@@ -30,6 +30,11 @@ export function sourceMergedPr(member:Member,facts:Facts):PrSnapshot|undefined {
     const pr=facts.prs.find(pr=>sameRef(pr.ref,link.pr));return pr?[pr]:[];
   });
   return [...(exact?[exact]:[]),...linked,...facts.prs.filter(pr=>pr.closes.some(ref=>sameRef(ref,member.ref)))].find(pr=>pr.state.kind==='merged'&&canonical(pr.target)===canonical(member.target));
+}
+
+/** A state write may change its own event, never its opposite-event baseline. */
+export function issueStateBaselineMatches(action:Extract<Action,{kind:'setIssueState'}>,issue:IssueSnapshot):boolean {
+  return (action.open?issue.lastClose:issue.lastReopen)?.id===action.afterEvent?.id;
 }
 
 /** Verification commits are shared by the source reader and the transition engine. */

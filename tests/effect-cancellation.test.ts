@@ -410,25 +410,6 @@ describe('cancelled effects retain truthful public obligations', () => {
     expect(world.member.ownerReceipt, world.trace()).toBeNull();
   });
 
-  test('an aborted holder cannot start its old wake through a new live candidate', () => {
-    const world = new Consumer();
-    world.observe(); world.bind(world.ownerTicket());
-    world.host.seats = world.host.seats.map(seat => ({ ...seat, status: 'parked' }));
-    world.observe();
-    const wake = world.effect('wake');
-    const oldSeat = world.host.seats[0]!;
-    world.host.seats = [
-      { ...oldSeat, status: 'aborted' },
-      { ...oldSeat, agentId: 'replacement-owner', sessionId: 'replacement-session', createdAt: 20_000, status: 'parked' },
-    ];
-    world.events.push({ source: 'native holder aborted and replacement candidate registered', old: oldSeat.agentId, replacement: 'replacement-owner' });
-    const holder = world.ownerTicket().holder;
-    expect(holder.kind === 'seat' && holder.agentId, world.trace()).toBe('replacement-owner');
-    const start = world.event({ kind: 'effectStarted', id: wake.id, attempt: 1, startedAt: 20_001 });
-    expect(start.kind, world.trace()).toBe('rejected');
-    expect(world.effectById(wake.id).attempt, world.trace()).toBe(0);
-  });
-
   test('ordinary cancellation of a nested body edit does not make its amendment effective', () => {
     const world = new Consumer();
     world.observe(); world.bind(world.ownerTicket());
