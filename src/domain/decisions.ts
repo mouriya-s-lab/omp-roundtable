@@ -1,5 +1,5 @@
 import type {Agenda,Amendment,ApplyingRef,CaseDecision,Context,DecisionCase,DesignRequirement,DomainError,Draft,DraftSpec,Effect,Inputs,Insertion,IssueRef,Member,Position,Result,RetryProvenance,ShaRef} from './model.ts';
-import {bodyHash,canonical,contains,memberOf,nextId,publicationAssociation,refKey,sameRef,sameRepo,unitOf} from './identity.ts';
+import {bodyHash,canonical,contains,memberOf,nextId,publicationAssociation,refKey,sameRef,sameRepo,sourceMergedPr,unitOf} from './identity.ts';
 
 export type DecisionServices={newCase:(context:Context,subject:DecisionCase['subject'],evidence:string)=>DecisionCase;openWork:(member:Member,basis:string)=>void;addEffect:(scope:Context,action:Agenda['effects'][number]['action'])=>string;validateInsertion:(entry:Insertion)=>Result<null,DomainError>;insert:(entry:Insertion)=>Result<readonly ApplyingRef[],DomainError>;newDraft:(spec:DraftSpec,position:Position,purpose:Draft['purpose'],caseId:string,reservedId?:string)=>Result<Draft,DomainError>;finishWork:(member:Member,kind:'noCode'|'replacePr'|'sourceRestored',decision:CaseDecision)=>void};
 const allowed:Record<Exclude<DecisionCase['subject']['kind'],'claim'>,readonly CaseDecision['kind'][]>={
@@ -94,6 +94,12 @@ export function applyDecision(state:Agenda,item:DecisionCase,decision:CaseDecisi
   if(!kinds.includes(decision.kind))return reject(`Decision ${decision.kind} is not allowed for ${item.subject.kind}`);
   if(item.state.kind!=='open'&&item.state.kind!=='awaitingExternal')return reject('Only current open or waiting case can be decided');
   for(const baseline of item.bodyBaselines){const current=bodyAt(input,baseline.issue);if(current&&current.bodyHash!==baseline.hash)return {ok:false,error:{kind:'premiseChanged',message:'Case body baseline changed; observe current input first',current:null}};}
+  if(item.subject.kind==='closed'||item.subject.kind==='reopened'){
+    const issue=bodyAt(input,item.subject.member);
+    if(!issue)return {ok:false,error:{kind:'sourceUnavailable',message:'Lifecycle source unavailable',current:null}};
+    const currentEvent=item.subject.kind==='closed'?issue.lastClose:issue.lastReopen;
+    if(currentEvent?.id!==item.subject.event?.id||issue.state!==(item.subject.kind==='closed'?'closed':'open'))return {ok:false,error:{kind:'premiseChanged',message:'Lifecycle case event advanced at source',current:null}};
+  }
   const member=item.context.kind==='member'?memberOf(state,item.context.member):undefined;
   const effect=effectOf(state,item);
   switch(decision.kind){
@@ -134,8 +140,9 @@ export function applyDecision(state:Agenda,item:DecisionCase,decision:CaseDecisi
         const inserted=services.insert({kind:'existing',entry:{issue:ref,target:{repo:ref.repo,base:repo.defaultBranch},designOnly:false,adoptPr:null},position:{kind:'after',unitId:state.units.at(-1)!.id}});
         if(!inserted.ok)return {ok:false,error:inserted.error};target=memberOf(state,ref);
       }
-      if(!target||!issue||issue.bodyHash!==decision.bodyHash||target.terminal.kind==='merged')return {ok:false,error:{kind:'premiseChanged',message:'No-code source body/terminal changed',current:null}};
+      if(!target||!issue||issue.bodyHash!==decision.bodyHash||target.terminal.kind==='merged'||input.facts.kind!=='available'||sourceMergedPr(target,input.facts.facts))return {ok:false,error:{kind:'premiseChanged',message:'No-code source body/terminal changed or a real merge already exists',current:null}};
       if(state.effects.some(effect=>effect.scope.kind==='member'&&sameRef(effect.scope.member,target.ref)&&(effect.state.kind==='executing'||effect.state.kind==='uncertain')))return reject('Unconfirmed mutation cannot be swallowed by no-code');
+      target.reconciledEvent=issue.lastReopen?.id??null;
       services.finishWork(target,'noCode',decision);target.terminal={kind:'noCode',bodyHash:decision.bodyHash,reason:decision.reason,acceptedAt};item.state={kind:'resolved',result:decision};break;
     }
     case 'split':{
@@ -144,8 +151,7 @@ export function applyDecision(state:Agenda,item:DecisionCase,decision:CaseDecisi
       return amend(state,item,proposal,input,services,decision,decision.insertions);
     }
     case 'replacePr':{
-      if(!member)return reject('PR replacement requires member');
-      if(member.binding.kind==='registered'&&!sameRef(member.binding.pr,decision.pr))return reject('Decision must identify the original abandoned PR');
+      if(!member||member.binding.kind!=='registered'||!sameRef(member.binding.pr,decision.pr))return reject('PR replacement requires the exact registered PR after publication is resolved');
       services.finishWork(member,'replacePr',decision);member.binding={kind:'none'};member.baseline={kind:'none'};item.state={kind:'resolved',result:decision};break;
     }
     case 'waitExternal':{
@@ -159,7 +165,7 @@ export function applyDecision(state:Agenda,item:DecisionCase,decision:CaseDecisi
       member.reconciledEvent=decision.eventId;
       if(decision.kind==='revokeNoCode'){if(member.terminal.kind!=='noCode')return reject('Only a no-code terminal can be revoked');member.terminal={kind:'pending'};}
       const open=decision.kind!=='restore';
-      const id=services.addEffect(item.context,{kind:'setIssueState',issue:member.ref,open,afterEvent:item.subject.event,bodyHash:issue.bodyHash});allRequired(item,decision,[{kind:'effect',effectId:id}]);break;
+      const id=services.addEffect(item.context,{kind:'setIssueState',issue:member.ref,open,afterEvent:open?issue.lastClose:issue.lastReopen,bodyHash:issue.bodyHash});allRequired(item,decision,[{kind:'effect',effectId:id}]);break;
     }
     case 'outOfScope':{const draft=services.newDraft(decision.draft,{kind:'outsideAgenda'},'outsideAgenda',item.id);if(!draft.ok)return draft;allRequired(item,decision,[{kind:'draft',draftId:draft.value.id}]);break;}
     case 'correctDesign':{

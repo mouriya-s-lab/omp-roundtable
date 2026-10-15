@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import type {Agenda,Caller,ConveneInput,DecisionCase,DomainError,Effect,EffectResult,Event,FactRead,Inputs,OwnerWorkTerminal,Policy,PortError,PortInput,ReplyResult,Result,SeatRequest,Ticket} from '../domain/model.ts';
 import {createAgenda,effectPrecondition,replyReplay,satisfiedResult,transition} from '../domain/engine.ts';
-import {canonical,digest,sameRef} from '../domain/identity.ts';
+import {canonical,digest,issueStateBaselineMatches,sameRef} from '../domain/identity.ts';
 import {callerOwns,callerTickets,mainCaller} from '../domain/tickets.ts';
 import type {AgendaFiles,GitHubPort,HostPort,PolicyReader,StateError} from '../ports/contracts.ts';
 import {createSourceReader,type EffectReceipt,type SourceReader} from './source.ts';
@@ -148,14 +148,14 @@ export class RoundtableController {
     if(operation.op==='tickets')return this.tickets(caller,operation.agenda);
     return this.serial(async()=>{
       if(!this.visible(caller))return domain('roundtableInactive','Enter /roundtable in Main; only its current seats may use the port');
+      if(caller.kind!=='main'&&operation.op!=='reply')return domain('unauthorized','Seats may only query tickets and reply to their own work');
       const pending=this.pending;
       const flushed=await this.flush();if(!flushed.ok)return flushed;
-      if(pending?.operation&&canonical(pending.operation)===canonical(operation)){
+      if(operation.op!=='reply'&&pending?.operation&&canonical(pending.operation)===canonical(operation)){
         if(sourceDependent(operation)||operation.op==='convene'||operation.op==='resume')this.kick();
         return {ok:true,value:{kind:'accepted',agenda:pending.state.id,version:pending.state.version,reply:pending.reply}};
       }
       let input=await this.inputs();if(!input.ok)return input;
-      if(caller.kind!=='main'&&operation.op!=='reply')return domain('unauthorized','Seats may only query tickets and reply to their own work');
       if(operation.op==='convene')return this.convene(caller,operation,cwd);
       if(operation.op==='resume')return this.resume(caller,operation,cwd);
       const ticketAgenda=operation.op==='reply'?operation.ticket.match(/^(?:work|gate|case|spawn):([^/]+)\//)?.[1]:undefined;
@@ -267,6 +267,10 @@ export class RoundtableController {
           const pr=input.value.facts.facts.prs.find(pr=>sameRef(pr.ref,action.pr));
           return !!pr&&(pr.state.kind==='closed'||pr.state.kind==='merged'&&(pr.head!==action.head||canonical(pr.target)!==canonical(action.target)));
         }
+        if(action.kind==='setIssueState'&&input.value.facts.kind==='available'){
+          const issue=input.value.facts.facts.issues.find(issue=>sameRef(issue.ref,action.issue));
+          return issue!==undefined&&!issueStateBaselineMatches(action,issue);
+        }
         return false;
       };
       const effect=state.effects.find(effect=>effect.state.kind==='executing'&&actionable(effect))
@@ -332,6 +336,10 @@ export class RoundtableController {
       if(action.kind==='merge'){
         const pr=input.value.facts.kind==='available'?input.value.facts.facts.prs.find(pr=>sameRef(pr.ref,action.pr)):undefined;
         if(pr&&(pr.state.kind==='closed'||pr.state.kind==='merged'&&(pr.head!==action.head||canonical(pr.target)!==canonical(action.target))))return this.apply({kind:'effectCancelled',id:effect.id,reason:'targetBecameInapplicable'},input.value);
+      }
+      if(action.kind==='setIssueState'){
+        const issue=input.value.facts.kind==='available'?input.value.facts.facts.issues.find(issue=>sameRef(issue.ref,action.issue)):undefined;
+        if(issue&&!issueStateBaselineMatches(action,issue))return this.apply({kind:'effectCancelled',id:effect.id,reason:'targetBecameInapplicable'},input.value);
       }
       return {ok:true,value:null};
     }
