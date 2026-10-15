@@ -138,6 +138,7 @@ function memberGateStamp(member:Member,pr:PrSnapshot,kind:'review'|'accept'):Gat
   return kind==='review'?{kind,...shared,prBodyHash:pr.bodyHash}:{kind,...shared};
 }
 function invalidateChangedGates(member:Member,input:Inputs):void {
+  if(member.terminal.kind==='merged')return;
   const pr=boundPr(member,input);const issue=issueOf(input,member.ref);
   if(!source(input))return;
   for(const kind of ['review','accept'] as const){
@@ -226,7 +227,16 @@ function classifySource(state:Agenda,input:Inputs):void {
     if(merged?.state.kind==='merged'){
       if(member.work){member.ownerTerminal={kind:'externallyMerged',workId:member.work.id,pr:merged.ref,merge:{repo:merged.target.repo,sha:merged.state.sha},mergedAt:merged.state.at};member.work=null;}
       member.terminal={kind:'merged',pr:merged.ref,merge:{repo:merged.target.repo,sha:merged.state.sha},at:merged.state.at};
-      invalidateGates(member,'superseded');
+      for(const gate of [member.review,member.accept]){
+        if(!gate)continue;
+        switch(gate.status.kind){
+          case 'requested':gate.status={kind:'cancelled',reason:'superseded'};break;
+          case 'answered':
+            if((gate.stamp.kind!=='review'&&gate.stamp.kind!=='accept')||gate.stamp.head!==merged.head||!sameRepo(gate.stamp.target.repo,merged.target.repo)||gate.stamp.target.base!==merged.target.base)gate.status={kind:'cancelled',reason:'superseded'};
+            break;
+          case 'cancelled':break;
+        }
+      }
       for(const item of state.cases)if(canonical(item.context)===canonical(contextOf(member))&&item.state.kind!=='resolved'&&item.state.kind!=='cancelled'&&(item.subject.kind==='closed'||item.subject.kind==='unexpectedSourceChange'&&item.subject.cause.reason!=='bodyChanged'&&item.subject.cause.reason!=='noCodeBodyChanged'))item.state={kind:'cancelled',reason:'externallyMerged'};
     }
     if(member.terminal.kind==='noCode'&&member.terminal.bodyHash!==issue.bodyHash){member.terminal={kind:'pending'};newCase(state,contextOf(member),{kind:'unexpectedSourceChange',member:member.ref,cause:{reason:'noCodeBodyChanged',contractRevision:member.contract.revision},bodyHash:issue.bodyHash},'No-code basis changed at source',input);}
