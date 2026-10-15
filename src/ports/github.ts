@@ -81,6 +81,12 @@ function repo(value: { nameWithOwner: string }): m.Repo {
 const repoKey = (value: m.Repo) => `${value.owner}/${value.name}`.toLowerCase();
 const refKey = (value: m.IssueRef) => `${repoKey(value.repo)}#${value.number}`;
 const ref = (value: z.infer<typeof sourceRef>): m.IssueRef => ({ repo: repo(value.repository), number: value.number });
+function sameBranchState(left:m.BranchSnapshot['state'],right:m.BranchSnapshot['state']):boolean {
+  switch(left.kind){
+    case 'missing':return right.kind==='missing';
+    case 'present':return right.kind==='present'&&left.head===right.head;
+  }
+}
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const quote = (value: string) => JSON.stringify(value);
 const pathRepo = (value: m.Repo) => `repos/${encodeURIComponent(value.owner)}/${encodeURIComponent(value.name)}`;
@@ -277,7 +283,7 @@ export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
       if (source !== null && source.name !== name) fail('invalidResponse', `Branch identity mismatch: requested ${name}, received ${source.name}`);
       const existing = branches.find(item => repoKey(item.repo) === repoKey(repository) && item.name === name);
       const observation: m.BranchSnapshot = { repo: repository, name, state: source === null ? { kind: 'missing' } : { kind: 'present', head: source.target.oid } };
-      if (existing && JSON.stringify(existing) !== JSON.stringify(observation)) fail('invalidResponse', `Branch changed within facts read: ${repoKey(repository)} ${name}`);
+      if (existing && !sameBranchState(existing.state, observation.state)) fail('invalidResponse', `Branch changed within facts read: ${repoKey(repository)} ${name}`);
       if (!existing) branches.push(observation);
       const targetRepo = repos.find(item => repoKey(item.repo) === repoKey(repository));
       if (!targetRepo) return fail('invalidResponse', 'Branch repository was not read');
@@ -342,7 +348,7 @@ export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
       addBranch(targetRepo, source.baseRefName, source.baseRef, source.baseRefName === source.baseRepository.defaultBranchRef.name);
       const priorHead = branches.find(item => repoKey(item.repo) === repoKey(headRepo) && item.name === source.headRefName);
       const headState: m.BranchSnapshot = { repo: headRepo, name: source.headRefName, state: source.headRef ? { kind: 'present', head: source.headRef.target.oid } : { kind: 'missing' } };
-      if (priorHead && JSON.stringify(priorHead) !== JSON.stringify(headState)) fail('invalidResponse', 'PR head branch changed within facts read');
+      if (priorHead && !sameBranchState(priorHead.state, headState.state)) fail('invalidResponse', 'PR head branch changed within facts read');
       if (!priorHead) branches.push(headState);
       const rules = source.baseRef ? requirements(source.baseRef) : null;
       const prRef = ref(source);

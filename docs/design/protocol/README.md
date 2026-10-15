@@ -55,7 +55,7 @@ Event 闭合为 observe、hostObserved、reply(caller/ticket/revision/payload/ac
 
 effectFailed 对 ready 的唯一准入是未发送的 publishPr/replaceBody：outcome=knownFailed、error.kind=precondition，完整源头证明 current bodyHash 既非 expected 也非 target。它保留当前 attempt（可为 0），不伪造 executing/startedAt；同次建立 effectFailure。其它 failed/uncertain 结果只答当前 executing attempt。Main rebaseEdit 原子修改同意图并回 ready，下一次真实调用才 attempt 加一。
 
-Ticket 含稳定 id、revision、holder、准确 context、完整 brief、allowedReplies 与 `runDisposition:mustRun|mayWait`。id 是 `work:<WorkId>|gate:<JobId>|case:<CaseId>|spawn:<RequestId>`；ticket 含 agendaId，旧报告不能路由到新 active。work/case revision 是 contentVersion；gate/spawn 固定 1。所有 held 工作 mayWait，允许继续无争议部分但不得 submit；不得 wake。Main 不回复保持 attentionRequired 投影；child 投递后的真实回合已结束仍无回复时建立精确 hostPrecondition.seatNonresponse，不消费原票据。
+Ticket 含稳定 id、revision、holder、准确 context、完整 brief、allowedReplies 与 `runDisposition:mustRun|mayWait`。id 是 `work:<WorkId>|gate:<JobId>|case:<CaseId>|spawn:<RequestId>`；ticket 含 agendaId，旧报告不能路由到新 active。work/case revision 是 contentVersion；gate/spawn 固定 1。所有 held 工作 mayWait，允许继续无争议部分但不得 submit；不得 wake。Main 的源头依赖 case 在 facts unavailable 时 mayWait，open case 仍 attentionRequired，不消费或改写决定；源头恢复后按原对象重新投影。Main 不回复保持 attentionRequired 投影；child 投递后的真实回合已结束仍无回复时建立精确 hostPrecondition.seatNonresponse，不消费原票据。
 
 ## 回复准入与回执
 

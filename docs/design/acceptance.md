@@ -60,7 +60,7 @@ bun run tests/acceptance/public-api.ts
 
 使用现有 sandbox `RiriAgent/rt-e2e-20260930-0931`，actor RiriAgent。本轮对象 namespace 为 `rt-rewrite-<runId>`；既有 issue/PR/branch/file 不改不删，不创建新 repo。临时 HOME、agentDir、state、clone、overlay、gh shim 和输出均在 mktemp `/tmp/rt-rewrite-XXXXXX`。
 
-owner launcher 启动/复用 owner-controlled auth broker，token 只在内存捕获并通过 OMP_AUTH_BROKER_URL/TOKEN 注入；不打印、不复制/链接真实 agent.db/models.yml/config.yml。清除 OMP_PROFILE/PI_PROFILE。child gh 使用 owner 的既有 GH_CONFIG_DIR，不改账号配置。专用 broker 只由本轮 launcher 关闭。所有圆桌 e2e 的 root 和 seat 只能使用操作员指定的 task:free 同款模型，或 `opencode-go/deepseek-v4.1-flash:low`；不允许其它模型或 fallback，也不改全局绑定。本轮选择后一种，root 用 `--model opencode-go/deepseek-v4.1-flash --thinking low`，隔离 task:free override 用相同 selector 加 `:low`。该选项有非零定价，但已由操作员明确授权；不能因之前免费-only 约束拒用它。
+owner launcher 启动/复用 owner-controlled auth broker，token 只在内存捕获并通过 OMP_AUTH_BROKER_URL/TOKEN 注入；不打印、不复制/链接真实 agent.db/models.yml/config.yml。清除 OMP_PROFILE/PI_PROFILE。child gh 使用 owner 的既有 GH_CONFIG_DIR；隔离 HOME 无法取得 keychain 凭据时，由拥有方 CLI 在内存取得同一 RiriAgent token，经 GH_TOKEN 注入，不改账号配置。专用 broker 只由本轮 launcher 关闭。所有圆桌 e2e 的 root 和 seat 只能使用操作员指定的 task:free 同款模型，或 `opencode-go/deepseek-v4.1-flash:low`；不允许其它模型或 fallback，也不改全局绑定。本轮选择后一种，root 用 `--model opencode-go/deepseek-v4.1-flash --thinking low`，隔离配置选择实际存在的 native `task` 角色，并以 `task.agentModelOverrides.task` 绑定相同 selector 加 `:low`。角色名称不证明实际模型，仍须核对运行记录。该选项有非零定价，但已由操作员明确授权；不能因之前免费-only 约束拒用它。
 
 实际宿主入口为 `omp` 加 `-e <implementation-worktree>/index.ts`；隔离配置与凭据由既有 owner-controlled 启动路径注入。已有 `tests/acceptance/host-contract.ts` 只证明 HostPort 边界，不代替根插件的功能验收；不得为填补产品路径而新增测试或探针。
 

@@ -130,7 +130,7 @@ controller 缓存最近完整 FactRead 仅供 tickets/context/yield；失败失�
 
 默认每 120 秒完整事实轮询。ctx/tickets/agent_end/yield/accepted replay 与无内容变化 registry 均零 GitHub、零文件写。registry、turn-end 与新本地回复只排独立 hostObserved macrotask；无变化返回 same。hostObserved 刷新真实绑定、owner same WorkId/new Request、requested gate same stamp/new Job/new Request、失效通知及精确非响应 case；通知资格只取只读 Ticket 投影，不以缓存推进 GitHub 业务或解除业务 hold。所有后台 turn 先核宿主生命周期，因此 GitHub 失败不阻止续席。source 相同只有 observedAt 变化返回 same。一次 controller turn 处理一个当前效应，后续效应独立排队并重新 preflight；准确 replay 与只读查询不主动执行 hostObserved。
 
-只向 runnable 且 native idle（非 streaming）或 parked 的 holder 自动投递，每个 `(workId,contentVersion,holder,runId)` 或 `(jobId,holder,runId)` 一次。idle 保留真实 session，parked 需 ensureLive；不要求宿主先 park，也不代改 task TTL。spawn assignment 不冒充本次 delivery receipt。相同版本投递后真实回合结束仍未回复，hostObserved 建精确 hostPrecondition.seatNonresponse；实际 terminal reply 消费义务可取消已无用途的通知意图，但不声称旧消息已投递。已接受的 host recovery 不反过来阻塞它直接等待的 wake，其它工作/case/依赖仍阻塞。timer 不无限启动回合。Main 每新 ticket/revision 每 run 提醒一次；未回复一轮后 ui.notify/tickets attention，不伪造进展。
+只向 runnable 且 native idle（非 streaming）或 parked 的 holder 自动投递，每个 `(workId,contentVersion,holder,runId)` 或 `(jobId,holder,runId)` 一次。idle 保留真实 session，parked 需 ensureLive；不要求宿主先 park，也不代改 task TTL。spawn assignment 不冒充本次 delivery receipt。相同版本投递后真实回合结束仍未回复，hostObserved 建精确 hostPrecondition.seatNonresponse；实际 terminal reply 消费义务可取消已无用途的通知意图，但不声称旧消息已投递。已接受的 host recovery 不反过来阻塞它直接等待的 wake，其它工作/case/依赖仍阻塞。timer 不无限启动回合。Main 每新 ticket/revision 每 run 提醒一次；排队提醒仅要求重新读取当前票据，不携带可能过时的可行动票据断言。未回复一轮后 ui.notify/tickets attention，不伪造进展。
 
 ## C8 席位简报、身份与工作目录
 
