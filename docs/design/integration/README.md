@@ -140,6 +140,8 @@ Policy 取 Main 最新 before_agent_start 原文，Engineering/Workflow/Delivery
 
 brief 必含：ticket/revision/context、issue/parent 链接、repo rules、准确远端起点/工作目录、完整策略、owner 全预期与 PR 四层证据/重试要求、review Gate1–5 与现行裁定、accept 独立真实入口/干净 checkout、postMerge 全 unit/指定 commit、closure 全 child/parent 行、Main 设计依据、各裁定的实际语义及每个允许回复 JSON。findings brief 必须说明 upholdOwner/upholdMain 接受发现并分别指定 owner 实现修复或 Main 设计修复，reject 驳回发现而不是驳回 PR，不能要求模型从英文名字推测义务。只删除已覆盖的协议评论/复杂 verdict/手工 merge-wake，不削弱角色要求。relay/yield 文本不是协议回复。
 
+closure 与 ReportWork 的 brief 同时展示现有 confirmed setIssueState 结果、closure 结构化戳及带 generation/observedAt 的完整源头观察中的 issue 开关与 close/reopen 事件。它们分别是本系统确认过的动作、接受过的评判输入和取回时刻的副本，不互相覆盖；facts unavailable 时仍展示已有确认事实并明确读数缺口，不补造当前状态。noCode 不表示 issue OPEN，无 PR 或无独立 close Effect 也不表示 OPEN。模型必须区分 source 读数、动作确认与旧自然语言，不能沿用旧 issue:// 或 pr:// 副本推翻后来的结构化读数；report 回复仍不新增 GitHub I/O。
+
 候选匹配 exact requestedName 或 native 数字后缀，仅用于发现。按 createdAt 升序、同时间 registry 顺序选唯一，已有可用 holder 不被第二名覆盖。注册后 Main 回执前允许唯一候选答其工单，但鉴权必须核 session/parent/run/request；多派者/孙级不可见。已有 pending 候选 Main 只 spawned 回执、不再 spawn。
 
 目录根为 `/tmp/omp-roundtable/<agendaId>`：owner `/members/<memberKey>/owner`；review/accept `/members/<memberKey>/gates/<jobId>`；postMerge `/units/<unitId>/gates/<jobId>`；closure `/agenda/gates/<jobId>`；Main design `/design/<workId>`。跨 repo gate 各建 clone，不取第一个 repo。owner 从远端独立 clone，不改继承 isolation checkout；续作保留未推送提交，拒绝强推。owner request 跨工作复用，abort/新 run 才换；gate 每 Job fresh。

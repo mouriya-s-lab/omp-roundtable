@@ -34,7 +34,7 @@ postMerge/closure 的 cause 为真实 verdict{jobId,note} 或 ancestry{compariso
 
 `AmendmentIntent` 属于接受它的 Case，状态 `pending{bodyEdits,designWork,insertions,requiredEffectIds}|effective{revision}`。正文等于 target、真实设计提交取得、必要转交 issue 登记后一次提升 affected contract revision、替换当前条款/DesignRequirement、解除 owner 等待。pending 不假称正文已改。纯 answer 不制造 amendment。
 
-`ReportWork` 是 Agenda 内 Main 的最后工单，summary 与 receipt 保留在 completed Agenda。报告只表示 Main 声明已经向用户报告，不证明用户已读。
+`ReportWork` 是 Agenda 内 Main 的最后工单，summary 与 receipt 保留在 completed Agenda。报告只表示 Main 声明已经向用户报告，不证明用户已读，也不把自然语言变成 GitHub 状态。报告与 closure 必须分清本地 noCode 终局、带时间的 issue source observation、已确认开关动作；noCode 不表示 issue OPEN，旧 note 不能覆盖更新的源头读数。错误的已完成自然语言不能回写；应在实际用户沟通中按源头更正，不改既有 receipt。
 
 ## 纯公开 API
 
