@@ -7,7 +7,7 @@ const gateInstructions={
   review:'按 skill://review-pr 顺序执行 Gate1–5，首个失败停止；固定本 job 输入，以 issue 契约为尺，不扩大范围，不派审查子代理，不替作者补证据。当前驳回和问答裁定逐字有效；没有新前提/证据不要重复已答问题。Main 设计 commit 的发现归 Main。',
   accept:'使用独立干净 detached checkout，核实指定 head；经真实用户入口逐条观察预期结果正负路径。纯库自己在 repo 外写 driver，CLI 真实命令，Web 用 agent-browser 完整操作并核 DB/下游。不能复用作者 driver/tests；最后跑 repo 校验，不修改实现。',
   postMerge:'覆盖本 unit 全成员，包含原项、前置、correction/noCode correction。对每 repo 使用 stamp 指定 commit 的独立干净 checkout；召集后 merge 测最新合并，遗留在包含 merges 的 default 读数上。部署型按 repo 目标环境验证，核每成员结果与关闭。无关失败明确说明，通过 Main 分类形成 outsideAgenda；不要冒称修复。',
-  closure:'逐行验 parent 关闭验证，核源头全部 children（含尚未结束项），所有成员 merged/noCode/关闭及每 repo default ancestry、设计承载/迁移均满足。不能从 children 已 merged 推断 parent 产品结果成立。',
+  closure:'逐行验 parent 关闭验证，核源头全部 children（含尚未结束项），所有成员 merged/noCode/关闭及每 repo default ancestry、设计承载/迁移均满足。不能从 children 已 merged 推断 parent 产品结果成立。noCode 只是本地工作终局，不表示 GitHub issue OPEN；关闭状态以当前 pin、下方源头观察和已确认动作分别说明。issue:// 或 pr:// 的旧副本与这些读数冲突时必须向 GitHub 核实，不沿用旧 OPEN。',
 } satisfies Record<GateJob['kind'],string>;
 const claimExamples:readonly ProtocolReply[]=[
   {kind:'claim',claim:{kind:'question',reproduction:'填写准确路径与实际观察',readings:['填写第一种原文读法','填写第二种原文读法'],earliestGap:'填写最早未决契约点',proposal:'填写建议裁定'}},
@@ -155,11 +155,20 @@ Main DesignWork；父决定及真实直接依赖 ${canonical(parent)}
 完整工具参数 JSON：
 ${replyExamples(`work:${work.id}`,work.contentVersion,examples)}`;
 }
+function closingEvidence(state:Agenda,input:Inputs):string {
+  const confirmed=state.effects.flatMap(effect=>effect.action.kind==='setIssueState'&&effect.state.kind==='confirmed'?[{effectId:effect.id,result:effect.state.result}]:[]);
+  const observed=input.facts.kind==='available'?{kind:'available',generation:input.facts.generation,observedAt:input.facts.observedAt,issues:input.facts.facts.issues.map(issue=>({ref:issue.ref,state:issue.state,lastClose:issue.lastClose,lastReopen:issue.lastReopen}))}:input.facts;
+  return `已确认的 issue 开关动作（执行确认时的事实，不覆盖后来源头事件）：${canonical(confirmed)}
+最后一次完整 GitHub 观察（仅代表 observedAt，不是永久当前状态）：${canonical(observed)}
+当前 closure 的结构化源头戳：${canonical(state.closure?.stamp??null)}
+noCode 只表示本地实现义务终结，绝不表示 GitHub issue OPEN；无 PR 也不是 issue 状态。PR closing 自动关闭没有独立 setIssueState Effect，不能由缺少该 Effect 推断 OPEN。已结束 unit 记录当时通过的关闭对账，不证明未来永不 reopen。区分这些事实的来源与时间；不要从旧 issue://、pr:// 副本、gate note 或其它自然语言推翻结构化源头读数。`;
+}
 export function reportBrief(state:Agenda,input:Inputs,report:ReportWork):string {
   const external=state.units.flatMap(unit=>unit.members.flatMap(member=>member.ownerTerminal?.kind==='externallyMerged'?[member.ownerTerminal]:[]));
   return `${shared(state,input,{id:`work:${report.id}`,revision:report.contentVersion,context:{kind:'agenda'}})}
 Main 最终报告；全部 unit/parent/设计/效应已确认。向用户实际报告每项 issue、PR、merge、验收证据及仍需说明的风险，然后回复 report；程序不声称用户已经阅读。
 外部合并的非回复终局 ${canonical(external)}
+${closingEvidence(state,input)}
 完整当前交付结果 ${canonical(state.units.map(unit=>({id:unit.id,members:unit.members.map(member=>({issue:link(member.ref),terminal:member.terminal,ownerTerminal:member.ownerTerminal})),postMerge:unit.postMerge})))}
 完整工具参数 JSON：
 ${replyExamples(`work:${report.id}`,report.contentVersion,[{kind:'report',summary:'填写已经向用户报告的完整实际结果与证据，不把未验证项称为完成'}])}`;
@@ -167,7 +176,7 @@ ${replyExamples(`work:${report.id}`,report.contentVersion,[{kind:'report',summar
 export function gateBrief(state:Agenda,input:Inputs,gate:GateJob):string {
   const context=gate.context;
   const members=context.kind==='member'?state.units.flatMap(unit=>unit.members).filter(member=>refKey(member.ref)===refKey(context.member)):context.kind==='unit'?state.units.find(unit=>unit.id===context.unitId)?.members??[]:state.units.flatMap(unit=>unit.members);
-  return `${shared(state,input,{id:`gate:${gate.id}`,revision:1,context:gate.context})}\n角色 ${gate.kind}，新 JobId ${gate.id}；必须 fresh holder，不能沿用上一轮评判。\n${gateInstructions[gate.kind]}\n结构化 pin（程序核实，不让模型抄回）：${canonical(gate.stamp)}\n工作目录 ${workspace(state,gate.context,gate.kind,gate.id)}；跨 repo 对每 repo 分别独立 clone，不能选第一个成员代替 scope。\n全部成员与契约：\n${members.map(member=>`${link(member.ref)} contract revision ${member.contract.revision}\n${member.contract.body}`).join('\n\n')}\n完整现行裁定：${canonical(gate.stamp.rulings)}\nverdict 只填 ok/note，不能加 head/逐行/pin/分类字段。需要额外主张时用 claim，程序建立独立 Main case 并撤销本 Job；Main 决定后由 fresh Job/fresh holder 重做。完整端口 JSON 示例：\n${replyExamples(`gate:${gate.id}`,1,[{kind:'verdict',ok:true,note:'填写真实正负入口结果与可复现命令'},{kind:'verdict',ok:false,note:'填写首个违反当前契约的实际发现和复现证据'},...claimExamples])}`;
+  return `${shared(state,input,{id:`gate:${gate.id}`,revision:1,context:gate.context})}\n角色 ${gate.kind}，新 JobId ${gate.id}；必须 fresh holder，不能沿用上一轮评判。\n${gateInstructions[gate.kind]}\n结构化 pin（程序核实，不让模型抄回）：${canonical(gate.stamp)}\n${gate.kind==='closure'?closingEvidence(state,input):''}\n工作目录 ${workspace(state,gate.context,gate.kind,gate.id)}；跨 repo 对每 repo 分别独立 clone，不能选第一个成员代替 scope。\n全部成员与契约：\n${members.map(member=>`${link(member.ref)} contract revision ${member.contract.revision}\n${member.contract.body}`).join('\n\n')}\n完整现行裁定：${canonical(gate.stamp.rulings)}\nverdict 只填 ok/note，不能加 head/逐行/pin/分类字段。需要额外主张时用 claim，程序建立独立 Main case 并撤销本 Job；Main 决定后由 fresh Job/fresh holder 重做。完整端口 JSON 示例：\n${replyExamples(`gate:${gate.id}`,1,[{kind:'verdict',ok:true,note:'填写真实正负入口结果与可复现命令'},{kind:'verdict',ok:false,note:'填写首个违反当前契约的实际发现和复现证据'},...claimExamples])}`;
 }
 export function caseBrief(state:Agenda,input:Inputs,item:DecisionCase):string {
   const subject=item.subject;
