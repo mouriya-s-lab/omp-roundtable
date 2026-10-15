@@ -197,6 +197,7 @@ Stall 引用的实际当前对象：${canonical(referenced)}
 source 读取 ${input.facts.kind==='available'?`generation ${input.facts.generation} scope ${canonical(input.facts.scope)}`:canonical(input.facts.error)}
 先读拥有该语义的完整文档/原 issue，不向操作员问日常裁定，不删除既定义务。applying 只读孩子进度，不能覆盖原决定；awaitingExternal 允许 Main 按本 revision 解除或替换等待。
 本 subject 的决定种类：${canonical(allowedDecisionKinds(state,item))}。
+${subject.kind==='findings'?'决定语义：upholdOwner = 认定该 finding 成立，交给原成员 owner 修复实现；不是认可当前 PR。upholdMain = 认定 finding 成立，由 Main 先修设计并提交真实 designCommit，owner 等待。reject = 有证据地驳回该 finding，随后必须 fresh gate，不把 not-ok 改成 pass。outOfScope = 将确切超范围义务登记为独立 draft；amend = 按明确正文与设计路线修订契约。不要从英文名字猜含义。':''}
 以下完整端口 JSON 使用当前真实身份与正文基准；说明文本必须替换为实际依据。缺少真实候选的 adopt、不可重跑 status、无原实现上下文的 implementationDefect 不可用。retryAfterAbsence/retryHost 明确承担重复风险，不是平台 exactly-once。
 ${replyExamples(`case:${item.id}`,item.contentVersion,choices.map(decision=>({kind:'decision',decision})))}
 correct / correctDesign 对 terminal findings 必须 correctionOf 原 unit，不能重开已 merged 的原 OwnerWork。correctDesign 的 clauses 是 Main 设计工作内容，不是未经 BodyEdit 的旧 issue 契约改写；Main designCommit 前必须源头证明进入 correction target repo default，全部创建/挂接和设计完成后才放入新 correction member，并同次写它的 required commit。
