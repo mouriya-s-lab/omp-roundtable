@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { z } from '@oh-my-pi/omptype/zod';
 import { agendaIdSchema } from '../domain/model.ts';
 import type { Agenda, AgendaId, Result } from '../domain/model.ts';
@@ -53,6 +53,25 @@ async function syncDirectory(directory: string): Promise<void> {
 /** A single controller owns writes; expectedVersion is not a cross-process CAS. */
 export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): AgendaFiles {
   const directory = join(dataDir, 'state');
+  let preparation: Promise<void> | undefined;
+  async function prepareDirectory(): Promise<void> {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    let current = await realpath(directory);
+    for (;;) {
+      await syncDirectory(current);
+      const parent = dirname(current);
+      if (parent === current) return;
+      current = parent;
+    }
+  }
+  function prepare(): Promise<void> {
+    // This port owns directory creation. Complete its durability once per
+    // instance; a failed initialization must repeat the entire ancestor chain.
+    return preparation ??= prepareDirectory().catch(error => {
+      preparation = undefined;
+      throw error;
+    });
+  }
 
   async function load(id: AgendaId): Promise<StateResult<Agenda>> {
     if (!agendaIdSchema.safeParse(id).success) return failure('corruptState', 'Invalid agenda filename identity');
@@ -103,6 +122,7 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
       // Rename may already have succeeded while directory fsync failed. Repair
       // durability against the actual target without replacing unchanged content.
       try {
+        await prepare();
         const handle = await open(target, 'r');
         try {
           await handle.chmod(0o600);
@@ -111,7 +131,6 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
           await handle.close();
         }
         await syncDirectory(directory);
-        await syncDirectory(dataDir);
         return { ok: true, value: null };
       } catch (error) {
         return unavailable(`Sync agenda ${state.id}`, error);
@@ -126,9 +145,7 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
     let temporaryCreated = false;
     let renamed = false;
     try {
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-      // Persist the state-directory entry as well as the file rename inside it.
-      await syncDirectory(dataDir);
+      await prepare();
       const handle = await open(temporary, 'wx', 0o600);
       temporaryCreated = true;
       try {

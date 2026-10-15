@@ -31,7 +31,7 @@ available 相对于当前协议状态的完整读集成立：所有 Member/paren
 
 AgendaFiles 保存 `{format:3,state:Agenda}` 到 `<dataDir>/state/<agendaId>.json`，权限 0600。load/list 完整 parse；format 1/2、坏文件、缺失分别 unsupportedFormat/corruptState/notFound。不迁移、不删除、不从 GitHub 重建本系统工作。
 
-save 比较 expected version，写同目录临时文件、文件 fsync、原子 rename、目录 fsync。same/rejected 不打开写文件。写入重试固定 envelope；rename 后 durability 不确定按生命周期恢复表处理，不重新 transition。单 writer version 校验不承诺多进程 CAS。mode 进入时 parse 整个 state 目录，不建 active.json；零 active 可 convene，一个 active 提示显式 resume，多个 active ownershipConflict。
+save 比较 expected version，写同目录临时文件、文件 fsync、原子 rename、目录 fsync。首次 save 由端口创建目录，并沿 realpath 的实际目录层级同步到根，使新 dataDir 及祖先目录的目录项在确认成功前落盘；每个端口实例仅保留这次已完成的初始化 Promise，初始化失败必须重做完整层级。load/list 不创建目录，exact-target 修复同样等待初始化。same/rejected 不打开写文件。写入重试固定 envelope；rename 后 durability 不确定按生命周期恢复表处理，不重新 transition。单 writer version 校验不承诺多进程 CAS。mode 进入时 parse 整个 state 目录，不建 active.json；零 active 可 convene，一个 active 提示显式 resume，多个 active ownershipConflict。
 
 ## C3 真实 Host 连接
 
@@ -138,7 +138,7 @@ controller 缓存最近完整 FactRead 仅供 tickets/context/yield；失败失�
 
 Policy 取 Main 最新 before_agent_start 原文，Engineering/Workflow/Delivery/Critical/generic-rules 整块保留；getAgentDir 下 APPEND_SYSTEM.md 存在则逐字附入，不存在保留实际 systemPrompt 的 appendix 原文；读错 sourceUnavailable，不空策略。before_agent_start 的 systemPrompt 是 string[]。
 
-brief 必含：ticket/revision/context、issue/parent 链接、repo rules、准确远端起点/工作目录、完整策略、owner 全预期与 PR 四层证据/重试要求、review Gate1–5 与现行裁定、accept 独立真实入口/干净 checkout、postMerge 全 unit/指定 commit、closure 全 child/parent 行、Main 设计依据及每个允许回复 JSON。只删除已覆盖的协议评论/复杂 verdict/手工 merge-wake，不削弱角色要求。relay/yield 文本不是协议回复。
+brief 必含：ticket/revision/context、issue/parent 链接、repo rules、准确远端起点/工作目录、完整策略、owner 全预期与 PR 四层证据/重试要求、review Gate1–5 与现行裁定、accept 独立真实入口/干净 checkout、postMerge 全 unit/指定 commit、closure 全 child/parent 行、Main 设计依据、各裁定的实际语义及每个允许回复 JSON。findings brief 必须说明 upholdOwner/upholdMain 接受发现并分别指定 owner 实现修复或 Main 设计修复，reject 驳回发现而不是驳回 PR，不能要求模型从英文名字推测义务。只删除已覆盖的协议评论/复杂 verdict/手工 merge-wake，不削弱角色要求。relay/yield 文本不是协议回复。
 
 候选匹配 exact requestedName 或 native 数字后缀，仅用于发现。按 createdAt 升序、同时间 registry 顺序选唯一，已有可用 holder 不被第二名覆盖。注册后 Main 回执前允许唯一候选答其工单，但鉴权必须核 session/parent/run/request；多派者/孙级不可见。已有 pending 候选 Main 只 spawned 回执、不再 spawn。
 
