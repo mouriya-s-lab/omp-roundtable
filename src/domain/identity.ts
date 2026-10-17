@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import type {Action,Agenda,Context,DomainRef,Effect,Facts,GateJob,HoldRef,Inputs,IssueRef,IssueSnapshot,Member,MemberStamp,OwnerWork,PrSnapshot,Repo,ShaRef,Unit,VerifyRepo,WorkAvailability} from './model.ts';
+import type {Action,Agenda,Context,DomainRef,Effect,Facts,GateJob,HoldRef,Inputs,IssueRef,IssueSnapshot,Member,MemberStamp,OwnerWork,PrSnapshot,Repo,Result,ShaRef,Unit,VerifyRepo,WorkAvailability} from './model.ts';
 
 export function canonical(value:unknown):string {
   if(value===null||typeof value!=='object')return JSON.stringify(value)??'null';
@@ -10,6 +10,17 @@ export function digest(value:unknown):string{return createHash('sha256').update(
 export function bodyHash(body:string):string{return createHash('sha256').update(body).digest('hex');}
 export function repoKey(repo:Repo):string{return `${repo.owner}/${repo.name}`;}
 export function refKey(ref:IssueRef):string{return `${repoKey(ref.repo)}#${ref.number}`;}
+/**
+ * The one published form of an issue: `<owner>/<repo>#<number>` in the launcher
+ * link path, in the coordinator launch flag, and in the Tern block arguments.
+ * Both boundaries parse through here so the three never drift apart.
+ */
+export function parseIssueReference(value:string):Result<IssueRef,string> {
+  const match=/^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\/([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)#([1-9][0-9]{0,14})$/.exec(value);
+  if(!match)return {ok:false,error:`An issue reference must be <owner>/<repo>#<number>, not ${JSON.stringify(value)}`};
+  const [owner,name,number]=match.slice(1) as [string,string,string];
+  return {ok:true,value:{repo:{owner,name},number:Number(number)}};
+}
 export function sameRef(a:IssueRef,b:IssueRef):boolean{return refKey(a)===refKey(b);}
 export function sameRepo(a:Repo,b:Repo):boolean{return repoKey(a)===repoKey(b);}
 export function exactClosingBody(body:string,member:IssueRef,defaultRepo:Repo):boolean {

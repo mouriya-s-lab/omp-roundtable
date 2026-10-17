@@ -12,7 +12,8 @@ export type AgendaView={
   cases:readonly DecisionCase[];effects:readonly Effect[];externalMerges:readonly OwnerWorkTerminal[];
   report:string|null;sourceError:PortError|null;
 };
-export type ModeView={kind:'mode';enabled:boolean;active:readonly string[];message:string};
+/** The startup check a coordinator Main runs once, before its first turn. */
+export type StartupView={active:readonly string[]};
 export type ControllerOutput=AgendaView|{kind:'plan';input:ConveneInput}|{kind:'accepted';agenda:string;version:number;reply:ReplyResult|null};
 export type ControllerOptions={files:AgendaFiles;github:GitHubPort;host:HostPort;policy:PolicyReader;intervalSeconds:number;onChange:()=>void;onError:(error:RuntimeError)=>void};
 type Selection={sessionId:string;agendaId:string};
@@ -35,7 +36,6 @@ export class RoundtableController {
   private readonly source:SourceReader;
   private main:Caller|null=null;
   private policy:Policy|null=null;
-  private enabled=false;
   private attached:Agenda|null=null;
   private facts:FactRead={kind:'unavailable',error:unavailable('No complete source observation has been read')};
   private pending:PendingWrite|null=null;
@@ -62,29 +62,24 @@ export class RoundtableController {
   }
   /** Visibility is a read-only projection; it never queues writes or network I/O. */
   visible(caller:Caller):boolean {
-    if(this.closed||!this.enabled||!this.main||caller.runId!==this.runId)return false;
+    if(this.closed||!this.main||caller.runId!==this.runId)return false;
     if(caller.kind==='main')return caller.agentId===this.main.agentId&&caller.sessionId===this.main.sessionId;
     if(!this.attached||!this.policy)return false;
     const observed=this.options.host.observe(this.runId,this.main);if(!observed.ok)return false;
     const input:Inputs={facts:this.facts,host:observed.value,policy:this.policy};
     return this.attached.requests.some(request=>callerOwns(request,input,caller));
   }
-  async mode(caller:Caller,on:boolean):Promise<Result<ModeView,RuntimeError>> {
-    return this.serial(async()=>{
-      if(!this.main||caller.kind!=='main'||caller.depth!==0||caller.agentId!==this.main.agentId||caller.sessionId!==this.main.sessionId||caller.runId!==this.runId)return domain('unauthorized','Only the actual bound Main can change Roundtable mode');
-      if(!on){
-        if(this.attached||this.pending)return domain('ownershipBlocked','An active agenda must finish and report before leaving Roundtable mode');
-        const list=await this.options.files.list();if(!list.ok)return {ok:false,error:{kind:'storage',error:list.error}};
-        if(list.value.some(state=>state.lifecycle==='active'))return domain('ownershipBlocked','An active saved agenda requires explicit resume, not mode off');
-        this.enabled=false;this.stopTimer();this.options.onChange();
-        return {ok:true,value:{kind:'mode',enabled:false,active:[],message:'Roundtable mode is off'}};
-      }
-      const list=await this.options.files.list();if(!list.ok)return {ok:false,error:{kind:'storage',error:list.error}};
-      const active=list.value.filter(state=>state.lifecycle==='active');
-      if(active.length>1)return domain('ownershipConflict',`Multiple active saved agendas: ${active.map(state=>state.id).join(', ')}`);
-      this.enabled=true;this.options.onChange();
-      return {ok:true,value:{kind:'mode',enabled:true,active:active.map(state=>state.id),message:active.length?'The saved active agenda requires explicit resume with confirmation that its original process ended':'Use roundtable convene with mode plan or execute'}};
-    });
+  /**
+   * The only entry point left for a coordinator: the process was launched for
+   * one issue, so its first turn reports the saved agendas that already exist
+   * and nothing can switch the process back out of the role.
+   */
+  async startup(caller:Caller):Promise<Result<StartupView,RuntimeError>> {
+    if(!this.main||caller.kind!=='main'||caller.depth!==0||caller.agentId!==this.main.agentId||caller.sessionId!==this.main.sessionId||caller.runId!==this.runId)return domain('unauthorized','Only the actual bound Main can start as the Roundtable coordinator');
+    const list=await this.options.files.list();if(!list.ok)return {ok:false,error:{kind:'storage',error:list.error}};
+    const active=list.value.filter(state=>state.lifecycle==='active');
+    if(active.length>1)return domain('ownershipConflict',`Multiple active saved agendas: ${active.map(state=>state.id).join(', ')}`);
+    return {ok:true,value:{active:active.map(state=>state.id)}};
   }
   private adopt(write:PendingWrite):void {
     this.attached=write.state.lifecycle==='active'?write.state:null;
@@ -147,7 +142,7 @@ export class RoundtableController {
   async execute(caller:Caller,operation:PortInput,cwd:string):Promise<OperationResult> {
     if(operation.op==='tickets')return this.tickets(caller,operation.agenda);
     return this.serial(async()=>{
-      if(!this.visible(caller))return domain('roundtableInactive','Enter /roundtable in Main; only its current seats may use the port');
+      if(!this.visible(caller))return domain('roundtableInactive','This session is not the coordinator Main or one of its current seats');
       if(caller.kind!=='main'&&operation.op!=='reply')return domain('unauthorized','Seats may only query tickets and reply to their own work');
       const pending=this.pending;
       const flushed=await this.flush();if(!flushed.ok)return flushed;
@@ -244,7 +239,7 @@ export class RoundtableController {
   private unexpected(error:unknown):void {this.options.onError({kind:'host',error:unavailable(error instanceof Error?error.message:'Unexpected controller failure')});}
   async run(cause:'timer'|'event'|'registry'):Promise<void> {
     await this.serial(async()=>{
-      if(this.closed||!this.enabled)return;
+      if(this.closed)return;
       const flushed=await this.flush();if(!flushed.ok){this.options.onError(flushed.error);return;}
       if(!this.attached)return;
       const host=await this.inputs();if(!host.ok){this.options.onError(host.error);return;}

@@ -3,17 +3,21 @@ import {join,resolve} from 'node:path';
 import {getAgentDir,logger,z,type ExtensionAPI,type ExtensionContext} from '@oh-my-pi/pi-coding-agent';
 import {register} from '@oh-my-pi/pi-coding-agent/config/registry';
 import {AgentRegistry,MAIN_AGENT_ID} from '@oh-my-pi/pi-coding-agent/registry/agent-registry';
+import {launcherCommand} from './src/launcher/commands.ts';
 import {buildPublicGrammar} from './src/domain/public-grammar.ts';
 import {parseToolParameters} from './src/domain/parse.ts';
 import type {Caller,ParseError,Policy,PortError,Result} from './src/domain/model.ts';
 import {createAgendaFiles} from './src/ports/state.ts';
 import {createGitHubPort} from './src/ports/github.ts';
 import {createHostPort} from './src/ports/host.ts';
+import {coordinatorBriefing,parseCoordinatorFlag,type CoordinatorIdentity} from './src/runtime/coordinator.ts';
 import {RoundtableController,type ControllerOutput,type RuntimeError} from './src/runtime/controller.ts';
 
 const SLOT=Symbol.for('omp-roundtable.runtime.v3');
 type SessionBinding={pi:ExtensionAPI;ctx:ExtensionContext;caller:Caller;activation:Promise<void>};
 type ToolResponse=Result<ControllerOutput,RuntimeError|{kind:'parse';error:ParseError}>;
+/** Read once per process: `absent` stays inert, `invalid` reports once, `coordinator` is the fixed role. */
+type Identity={kind:'absent'}|{kind:'invalid';message:string}|({kind:'coordinator'}&CoordinatorIdentity);
 
 function requireText(value:unknown):void {if(typeof value!=='string'||value.trim().length===0)throw new Error('Roundtable setting must be a nonempty string');}
 function requireInterval(value:unknown):void {if(typeof value!=='number'||!Number.isSafeInteger(value)||value<1||value>2_147_483)throw new Error('Roundtable recompute interval must be a positive safe whole number of seconds within the native timer range');}
@@ -28,20 +32,37 @@ class ProcessRuntime {
   private readonly bindings=new Map<ExtensionContext['sessionManager'],SessionBinding>();
   private readonly reminded=new Set<string>();
   private readonly host=createHostPort(id=>this.controller?.request(id));
-  private readonly unsubscribe=AgentRegistry.global().onChange(()=>this.controller?.registryChanged());
+  private unsubscribe:(()=>void)|null=null;
+  private identity:Identity|null=null;
   private controller:RoundtableController|null=null;
   private mainPrompt:readonly string[]|null=null;
   private notification:Promise<void>=Promise.resolve();
   private lastError:string|null=null;
+  private started=false;
   private closed=false;
 
+  /**
+   * Flags are resolved after extensions load, so the launch identity is read on
+   * first use and then fixed for the process.
+   */
+  readIdentity(pi:ExtensionAPI):Identity {
+    if(this.identity)return this.identity;
+    const raw=pi.getFlag('roundtable');
+    if(raw===undefined)return this.identity={kind:'absent'};
+    const parsed=parseCoordinatorFlag(raw);
+    return this.identity=parsed.ok?{kind:'coordinator',issue:parsed.value.issue,reference:parsed.value.reference}:{kind:'invalid',message:parsed.error};
+  }
   bind(pi:ExtensionAPI,ctx:ExtensionContext):Result<SessionBinding,PortError> {
     if(this.closed)return {ok:false,error:{kind:'precondition',message:'Roundtable runtime has shut down; start a new OMP process'}};
+    const identity=this.readIdentity(pi);
+    if(identity.kind==='absent')return {ok:false,error:{kind:'precondition',message:'This OMP process was not started as a Roundtable coordinator; there is no in-session way to enter Roundtable'}};
+    if(identity.kind==='invalid')return {ok:false,error:{kind:'precondition',message:identity.message}};
     if(!this.controller){
       if(ctx.agent.id!==MAIN_AGENT_ID||ctx.agent.kind!=='main')return {ok:false,error:{kind:'precondition',message:'Main must initialize Roundtable before child sessions'}};
       const session=AgentRegistry.global().get(MAIN_AGENT_ID)?.session;
       if(!session||session.sessionManager!==ctx.sessionManager)return {ok:false,error:{kind:'precondition',message:'Main settings do not belong to the current native session'}};
       this.mainPrompt=ctx.getSystemPrompt();
+      this.unsubscribe=AgentRegistry.global().onChange(()=>this.controller?.registryChanged());
       this.controller=new RoundtableController({
         files:createAgendaFiles(resolve(ctx.cwd,this.directory.get(session.settings))),github:createGitHubPort(),host:this.host,
         policy:()=>this.readPolicy(),intervalSeconds:this.interval.get(session.settings),
@@ -95,20 +116,23 @@ class ProcessRuntime {
       main.pi.sendMessage({customType:'roundtable-attention',content,display:true},{triggerTurn:true,deliverAs:'nextTurn'});
     }).catch(error=>this.failed(error));
   }
-  async command(binding:SessionBinding,args:string):Promise<void> {
-    if(binding.caller.kind!=='main'||binding.caller.depth!==0){binding.ctx.ui.notify('Only Main may change Roundtable mode','error');return;}
-    const command=args.trim();
-    if(command!==''&&command!=='off'){binding.ctx.ui.notify('Use /roundtable or /roundtable off; convene/resume are structured tool operations','error');return;}
-    if(!this.controller)throw new Error('Main controller is not initialized');
-    const result=await this.controller.mode(binding.caller,command!=='off');
-    await this.activate(binding);
-    binding.pi.sendMessage({customType:'roundtable-mode',content:JSON.stringify(result),display:true},{triggerTurn:false});
-    if(!result.ok)binding.ctx.ui.notify(errorText(result.error),'error');
+  /**
+   * The coordinator's first turn. The briefing is the only thing that tells
+   * Main what to do, and it is built from the launch reference plus the
+   * startup check of already saved agendas.
+   */
+  async start(binding:SessionBinding,identity:CoordinatorIdentity):Promise<void> {
+    if(this.started||!this.controller)return;
+    this.started=true;
+    const checked=await this.controller.startup(binding.caller);
+    if(!checked.ok)this.report(checked.error);
+    const agenda=checked.ok?(checked.value.active.length?`active: ${checked.value.active.join(', ')}`:'no saved active agenda'):`the startup check failed with ${errorText(checked.error)}`;
+    binding.pi.sendMessage({customType:'roundtable-start',content:coordinatorBriefing({reference:identity.reference,agenda}),display:true},{triggerTurn:true});
   }
   async execute(binding:SessionBinding,params:unknown):Promise<ToolResponse> {
     const parsed=parseToolParameters(params);
     if(!parsed.ok)return {ok:false,error:{kind:'parse',error:parsed.error}};
-    if(!this.controller)return {ok:false,error:{kind:'domain',error:{kind:'roundtableInactive',message:'Main controller is not initialized',current:null}}};
+    if(!this.controller)return {ok:false,error:{kind:'domain',error:{kind:'roundtableInactive',message:'This OMP process was not started as a Roundtable coordinator',current:null}}};
     return this.controller.execute(binding.caller,parsed.value.input,binding.ctx.cwd);
   }
   visible(binding:SessionBinding):boolean {return this.controller?.visible(binding.caller)??false;}
@@ -135,7 +159,7 @@ class ProcessRuntime {
     const binding=this.bindings.get(ctx.sessionManager);
     this.host.release(ctx);this.bindings.delete(ctx.sessionManager);
     if(binding?.caller.kind==='main'){
-      this.closed=true;this.unsubscribe();this.controller?.shutdown();
+      this.closed=true;this.unsubscribe?.();this.unsubscribe=null;this.controller?.shutdown();
     }
   }
 }
@@ -147,9 +171,11 @@ const processSlots=globalThis as typeof globalThis&{[SLOT]?:ProcessRuntime};
 export default function roundtable(pi:ExtensionAPI):void {
   const runtime=processSlots[SLOT]??(processSlots[SLOT]=new ProcessRuntime());
   const grammar=buildPublicGrammar(z);
+  const identity=()=>runtime.readIdentity(pi);
   const bind=(ctx:ExtensionContext)=>runtime.bind(pi,ctx);
+  pi.registerFlag('roundtable',{description:'Start this Main as the Roundtable coordinator for <owner>/<repo>#<number>; the identity holds for the whole process',type:'string'});
   pi.registerTool({
-    name:'roundtable',label:'Roundtable',description:'Operate the current Roundtable delivery protocol. Available only in Roundtable mode to Main and its exact current seats. Use tickets before replying; terminal receipts are durable, not relay acknowledgements.',
+    name:'roundtable',label:'Roundtable',description:'Operate the current Roundtable delivery protocol. Active only in a process launched for a Roundtable issue, for its Main and its exact current seats. Use tickets before replying; terminal receipts are durable, not relay acknowledgements.',
     parameters:grammar.toolParametersSchema,defaultInactive:true,
     async execute(_toolCallId,params,_signal,_onUpdate,ctx){
       const binding=bind(ctx);
@@ -157,20 +183,39 @@ export default function roundtable(pi:ExtensionAPI):void {
       return {content:[{type:'text',text:JSON.stringify(response)}],details:response};
     },
   });
-  pi.registerCommand('roundtable',{description:'Enter Roundtable delivery mode; off is allowed only after the agenda finishes',async handler(args,ctx){const binding=bind(ctx);if(!binding.ok){ctx.ui.notify(binding.error.message,'error');return;}await runtime.command(binding.value,args);}});
-  pi.on('session_start',async(_event,ctx)=>{const binding=bind(ctx);if(binding.ok)await runtime.activate(binding.value);else ctx.ui.notify(binding.error.message,'error');});
-  pi.on('before_agent_start',async(event,ctx)=>{runtime.capture(ctx,event.systemPrompt);const binding=bind(ctx);if(binding.ok)await runtime.activate(binding.value);});
+  pi.registerCommand('roundtable-launcher',{description:'Install, uninstall, or inspect the local Roundtable link launcher (install|uninstall|status)',async handler(args,ctx){const result=await launcherCommand(args.trim().split(/\s+/).filter(part=>part.length>0));ctx.ui.notify(result.ok?result.value:result.error,result.ok?'info':'error');}});
+  pi.on('session_start',async(_event,ctx)=>{
+    const current=identity();
+    if(current.kind==='absent')return;
+    if(current.kind==='invalid'){ctx.ui.notify(current.message,'error');return;}
+    const binding=bind(ctx);
+    if(!binding.ok){ctx.ui.notify(binding.error.message,'error');return;}
+    await runtime.activate(binding.value);
+    if(binding.value.caller.kind==='main')await runtime.start(binding.value,current);
+  });
+  pi.on('before_agent_start',async(event,ctx)=>{
+    if(identity().kind!=='coordinator')return;
+    runtime.capture(ctx,event.systemPrompt);const binding=bind(ctx);if(binding.ok)await runtime.activate(binding.value);
+  });
   pi.on('context',async(event,ctx)=>{
+    if(identity().kind!=='coordinator')return;
     const binding=bind(ctx);if(!binding.ok)return;
     const content=await runtime.context(binding.value);if(content===null)return;
     return {messages:[...event.messages.filter(message=>!(message.role==='custom'&&message.customType==='roundtable-current')),{role:'custom',customType:'roundtable-current',content,display:false,attribution:'agent',timestamp:Date.now()}]};
   });
   pi.on('tool_call',async(event,ctx)=>{
+    if(identity().kind!=='coordinator')return;
     if(event.toolName!=='roundtable'&&event.toolName!=='yield')return;
     const binding=bind(ctx);
     if(event.toolName==='roundtable'&&(!binding.ok||!runtime.visible(binding.value)))return {block:true,reason:'Roundtable is not active for this exact native session/request/holder'};
     if(event.toolName==='yield'&&binding.ok){const reason=await runtime.yieldBlock(binding.value);if(reason)return {block:true,reason};}
   });
-  pi.on('agent_end',async(_event,ctx)=>{const binding=bind(ctx);if(binding.ok)await runtime.end(binding.value);});
-  pi.on('session_shutdown',(_event,ctx)=>{runtime.release(ctx);});
+  pi.on('agent_end',async(_event,ctx)=>{
+    if(identity().kind!=='coordinator')return;
+    const binding=bind(ctx);if(binding.ok)await runtime.end(binding.value);
+  });
+  pi.on('session_shutdown',(_event,ctx)=>{
+    if(identity().kind!=='coordinator')return;
+    runtime.release(ctx);
+  });
 }
