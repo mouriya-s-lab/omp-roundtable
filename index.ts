@@ -127,7 +127,10 @@ class ProcessRuntime {
     const checked=await this.controller.startup(binding.caller);
     if(!checked.ok)this.report(checked.error);
     const agenda=checked.ok?(checked.value.active.length?`active: ${checked.value.active.join(', ')}`:'no saved active agenda'):`the startup check failed with ${errorText(checked.error)}`;
-    binding.pi.sendMessage({customType:'roundtable-start',content:coordinatorBriefing({reference:identity.reference,agenda}),display:true},{triggerTurn:true});
+    // nextTurn delivery keeps the briefing out of the editable pending queue and
+    // queues it behind an in-flight start (a programmatic `-p` prompt) instead of
+    // throwing AgentBusyError at it; an idle Main still gets a triggering turn.
+    binding.pi.sendMessage({customType:'roundtable-start',content:coordinatorBriefing({reference:identity.reference,agenda}),display:true},{triggerTurn:true,deliverAs:'nextTurn'});
   }
   async execute(binding:SessionBinding,params:unknown):Promise<ToolResponse> {
     const parsed=parseToolParameters(params);

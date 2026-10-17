@@ -65,6 +65,10 @@ describe('coordinator discovery and launch decision',()=>{
     expect(liveCoordinatorBlock(listing([{...liveBlock,live:false}]),reference)).toBeNull();
     expect(liveCoordinatorBlock(listing([{id:9,live:true,args:['--roundtable','Acme/roundtable#8']}]),reference)).toBeNull();
     expect(liveCoordinatorBlock(listing([{id:9,live:true,args:[`--roundtable=${reference}`]}]),reference)).toBe('9');
+    // Tern reports a launched command as `<shell> -c "<command>"`, with the
+    // whole command in one entry; the real launcher tab must still be found.
+    expect(liveCoordinatorBlock(listing([{id:11,live:true,args:['-c',`omp --roundtable '${reference}'`]}]),reference)).toBe('11');
+    expect(liveCoordinatorBlock(listing([{id:11,live:true,args:['-c',`omp --roundtable 'Acme/roundtable#8'`]}]),reference)).toBeNull();
     expect(liveCoordinatorBlock('not json',reference)).toBeNull();
   });
 

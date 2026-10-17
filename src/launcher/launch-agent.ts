@@ -14,7 +14,7 @@ export const LAUNCHER_LABEL='com.ohmyomp.roundtable-launcher';
 const cliPath=fileURLToPath(new URL('./cli.ts',import.meta.url));
 const plistPath=join(homedir(),'Library','LaunchAgents',`${LAUNCHER_LABEL}.plist`);
 const logPath=(suffix:'out'|'err'):string=>join(homedir(),'Library','Logs',`${LAUNCHER_LABEL}.${suffix}.log`);
-const launchctlTarget=`:gui/${process.getuid?.()??''}/${LAUNCHER_LABEL}`;
+const launchctlTarget=`gui/${process.getuid?.()??''}/${LAUNCHER_LABEL}`;
 
 export type LauncherFailure={kind:'unavailable';message:string};
 export type LauncherStatus={plist:string;installed:boolean;loaded:boolean;responding:boolean};
@@ -66,8 +66,10 @@ function portAnswers(timeoutMs:number):Promise<boolean> {
   return promise;
 }
 
-async function waitForPort():Promise<boolean> {
-  for(let attempt=0;attempt<10;attempt++){
+/** A cold interpreter start through a PATH shim can take several seconds, so the installer waits rather than reporting a healthy agent as dead. */
+async function waitForPort(patienceMs=20_000):Promise<boolean> {
+  const started=Date.now();
+  while(Date.now()-started<patienceMs){
     if(await portAnswers(500))return true;
     await delay(300);
   }

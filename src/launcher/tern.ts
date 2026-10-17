@@ -15,6 +15,11 @@ export type LaunchOutcome={kind:'launched';via:'tab'|'window'}|{kind:'focused';b
 
 function describe(result:{code:number;stdout:string;stderr:string}):string {return result.stderr.trim()||result.stdout.trim()||`exit code ${result.code}`;}
 
+/** Tern launches every block as `<shell> -c "<command>"`, so one launcher argument arrives as a fragment of one array entry; compare whitespace-separated, unquoted tokens rather than raw entries. */
+function coordinatorTokens(args:readonly string[]):string[] {
+  return args.flatMap(value=>value.split(/\s+/)).map(token=>token.replace(/^["']|["']$/g,'')).filter(token=>token.length>0);
+}
+
 /**
  * Tern owns existence: a live block already running the exact reference is the
  * coordinator for that issue. Nothing here keeps its own dedup record, so a
@@ -27,8 +32,8 @@ export function liveCoordinatorBlock(listing:string,reference:string):string|nul
   if(!read.success)return null;
   for(const session of read.data.sessions)for(const tab of session.tabs)for(const block of tab.blocks){
     if(block.live!==true)continue;
-    const args=block.args??[];
-    const carries=args.some((value,index)=>value==='--roundtable'&&args[index+1]===reference)||args.includes(`--roundtable=${reference}`);
+    const tokens=coordinatorTokens(block.args??[]);
+    const carries=tokens.some((token,index)=>token==='--roundtable'&&tokens[index+1]===reference)||tokens.includes(`--roundtable=${reference}`);
     if(carries)return String(block.id);
   }
   return null;
