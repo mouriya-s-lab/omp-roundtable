@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "keywords": ["pi-package", "pi-extension", "omp"],
-  "files": ["index.ts", "src/", "docs/", "README.md", "LICENSE"],
+  "files": ["index.ts", "src/", "README.md", "LICENSE"],
   "omp": {
     "extensions": ["./index.ts"]
   },
