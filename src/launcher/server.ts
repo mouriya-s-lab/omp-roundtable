@@ -2,9 +2,9 @@ import {createServer} from 'node:http';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {type Runner,run} from './exec.ts';
 import {LAUNCHER_PORT,isUserNavigation,resolveTarget} from './link.ts';
-import {launch} from './tern.ts';
+import {type LaunchOutcome,launch} from './tern.ts';
 
-export type LauncherOutcome={kind:'launched';via:'tab'|'window'}|{kind:'focused';block:string}|{kind:'rejected';reason:string}|{kind:'frontendFailed';output:string};
+export type LauncherOutcome=LaunchOutcome|{kind:'rejected';reason:string};
 export type LauncherOptions={port?:number;runner?:Runner;log?:(entry:Readonly<Record<string,unknown>>)=>void};
 export type Launcher={port:number;close:()=>Promise<void>};
 
@@ -21,7 +21,7 @@ function header(request:IncomingMessage,name:string):string|undefined {
 function renderPage(outcome:LauncherOutcome,url:string):{status:number;title:string;body:string} {
   switch(outcome.kind){
     case 'launched':
-      return {status:200,title:'launched',body:`<p>Tern is running <code>omp --roundtable</code> for <em>${escapeHtml(url)}</em>${outcome.via==='window'?' in a new window':' in a new tab'}.</p>`};
+      return {status:200,title:'launched',body:`<p>Tern is running <code>omp --roundtable</code> for <em>${escapeHtml(url)}</em> in a new tab.</p>`};
     case 'focused':
       return {status:200,title:'focused',body:`<p>Tern already holds live coordinator block <code>${escapeHtml(outcome.block)}</code> for this issue; it is focused now and no second process was started.</p>`};
     case 'rejected':
@@ -52,7 +52,7 @@ export async function serveLauncher(options:LauncherOptions={}):Promise<Launcher
     }
     const page=renderPage(outcome,request.url??'/');
     log({...received,reference,outcome:outcome.kind,
-      detail:outcome.kind==='rejected'?outcome.reason:outcome.kind==='focused'?outcome.block:outcome.kind==='frontendFailed'?outcome.output:outcome.via});
+      detail:outcome.kind==='rejected'?outcome.reason:outcome.kind==='focused'?outcome.block:outcome.kind==='frontendFailed'?outcome.output:reference});
     response.writeHead(page.status,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});
     response.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>omp-roundtable launcher: ${escapeHtml(page.title)}</title></head><body><h1>${escapeHtml(page.title)}</h1>${page.body}</body></html>`);
   };

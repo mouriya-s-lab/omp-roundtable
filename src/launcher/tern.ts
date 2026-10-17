@@ -6,12 +6,15 @@ import type {LaunchTarget} from './link.ts';
 const listingSchema=z.object({
   sessions:z.array(z.object({
     tabs:z.array(z.object({
-      blocks:z.array(z.object({id:z.number(),live:z.boolean().optional(),args:z.array(z.string()).optional()})),
+      blocks:z.array(z.object({id:z.number(),live:z.boolean().optional(),exited:z.number().nullable().optional(),args:z.array(z.string()).optional()})),
     })),
   })),
 });
 
-export type LaunchOutcome={kind:'launched';via:'tab'|'window'}|{kind:'focused';block:string}|{kind:'frontendFailed';output:string};
+/** `tern inspect --json`, read only for the connected clients; everything else is ignored. */
+const inspectionSchema=z.object({clients:z.array(z.object({kind:z.string().optional()}))});
+
+export type LaunchOutcome={kind:'launched'}|{kind:'focused';block:string}|{kind:'frontendFailed';output:string};
 
 function describe(result:{code:number;stdout:string;stderr:string}):string {return result.stderr.trim()||result.stdout.trim()||`exit code ${result.code}`;}
 
@@ -24,6 +27,8 @@ function coordinatorTokens(args:readonly string[]):string[] {
  * Tern owns existence: a live block already running the exact reference is the
  * coordinator for that issue. Nothing here keeps its own dedup record, so a
  * coordinator that exited simply stops matching and the next click starts one.
+ * Tern keeps a finished command's pane listed as `live` with its exit code, so
+ * only a pane that has not exited holds a coordinator.
  */
 export function liveCoordinatorBlock(listing:string,reference:string):string|null {
   let parsed:unknown;
@@ -31,7 +36,7 @@ export function liveCoordinatorBlock(listing:string,reference:string):string|nul
   const read=listingSchema.safeParse(parsed);
   if(!read.success)return null;
   for(const session of read.data.sessions)for(const tab of session.tabs)for(const block of tab.blocks){
-    if(block.live!==true)continue;
+    if(block.live!==true||block.exited!==null&&block.exited!==undefined)continue;
     const tokens=coordinatorTokens(block.args??[]);
     const carries=tokens.some((token,index)=>token==='--roundtable'&&tokens[index+1]===reference)||tokens.includes(`--roundtable=${reference}`);
     if(carries)return String(block.id);
@@ -40,23 +45,38 @@ export function liveCoordinatorBlock(listing:string,reference:string):string|nul
 }
 
 /**
+ * Tern's daemon outlives its window: with the app closed it still lists
+ * sessions and accepts a new tab, so a block started then is running but
+ * invisible. A connected `window` client is the evidence that a launch is
+ * visible to the operator; an unreadable report is not evidence of one.
+ */
+export function connectedWindow(inspection:string):boolean {
+  let parsed:unknown;
+  try {parsed=JSON.parse(inspection);} catch {return false;}
+  const read=inspectionSchema.safeParse(parsed);
+  if(!read.success)return false;
+  return read.data.clients.some(client=>client.kind==='window');
+}
+
+/**
  * Start or reveal the coordinator for one issue link. `omp` is taken from PATH,
  * as the operator's own shell would resolve it, and the extension arrives
  * through the installed plugin rather than an `-e` flag that would load it twice.
  */
 export async function launch(target:LaunchTarget,exec:Runner=run):Promise<LaunchOutcome> {
-  const listing=await exec('tern',['ls','--json'],{});
-  if(listing.code===0){
-    const holder=liveCoordinatorBlock(listing.stdout,target.reference);
-    if(holder!==null){
-      const focused=await exec('tern',['focus',holder],{});
-      return focused.code===0?{kind:'focused',block:holder}:{kind:'frontendFailed',output:`tern focus ${holder}: ${describe(focused)}`};
-    }
-    const tab=await exec('tern',['new','tab','--cwd',target.cwd,'--','omp','--roundtable',target.reference],{});
-    if(tab.code===0)return {kind:'launched',via:'tab'};
-    const opened=await exec('tern',['-e','omp','--roundtable',target.reference],{cwd:target.cwd});
-    return opened.code===0?{kind:'launched',via:'window'}:{kind:'frontendFailed',output:`tern new tab: ${describe(tab)}\ntern -e (no window): ${describe(opened)}`};
+  const inspection=await exec('tern',['inspect','--json'],{});
+  let listing=await exec('tern',['ls','--json'],{});
+  if(listing.code!==0||!connectedWindow(inspection.stdout)){
+    const opened=await exec('tern',[target.cwd],{});
+    if(opened.code!==0)return {kind:'frontendFailed',output:`tern ${target.cwd} (no window): ${describe(opened)}`};
+    if(listing.code!==0)listing=await exec('tern',['ls','--json'],{});
   }
-  const opened=await exec('tern',['-e','omp','--roundtable',target.reference],{cwd:target.cwd});
-  return opened.code===0?{kind:'launched',via:'window'}:{kind:'frontendFailed',output:`tern ls: ${describe(listing)}\ntern -e (Tern not running): ${describe(opened)}`};
+  if(listing.code!==0)return {kind:'frontendFailed',output:`tern ls: ${describe(listing)}`};
+  const holder=liveCoordinatorBlock(listing.stdout,target.reference);
+  if(holder!==null){
+    const focused=await exec('tern',['focus',holder],{});
+    return focused.code===0?{kind:'focused',block:holder}:{kind:'frontendFailed',output:`tern focus ${holder}: ${describe(focused)}`};
+  }
+  const tab=await exec('tern',['new','tab','--cwd',target.cwd,'--','omp','--roundtable',target.reference],{});
+  return tab.code===0?{kind:'launched'}:{kind:'frontendFailed',output:`tern new tab: ${describe(tab)}`};
 }
